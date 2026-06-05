@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Bus Tracking MY</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; }
+
+    /* ── Header ── */
+    #header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      background: #1565C0; color: white;
+      padding: 14px 20px 12px;
+      display: flex; align-items: center; justify-content: space-between;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    #header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    #header .tagline { font-size: 12px; opacity: 0.8; margin-top: 1px; }
+    #freshness {
+      font-size: 11px; background: rgba(255,255,255,0.15);
+      padding: 4px 10px; border-radius: 20px; white-space: nowrap;
+    }
+
+    /* ── Map ── */
+    #map { position: fixed; top: 60px; left: 0; right: 0; bottom: 0; }
+
+    /* ── Vehicle count pill ── */
+    #vehicle-count {
+      position: fixed; top: 72px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.65); color: white;
+      font-size: 12px; font-weight: 600;
+      padding: 4px 14px; border-radius: 20px; z-index: 900;
+      pointer-events: none;
+    }
+
+    /* ── Bottom sheet ── */
+    #sheet {
+      position: fixed; bottom: -400px; left: 0; right: 0; z-index: 1000;
+      background: white; border-radius: 20px 20px 0 0;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+      transition: bottom 0.3s cubic-bezier(0.4,0,0.2,1);
+      max-height: 65vh; display: flex; flex-direction: column;
+    }
+    #sheet.open { bottom: 0; }
+    .sheet-handle {
+      width: 40px; height: 4px; background: #ddd; border-radius: 2px;
+      margin: 12px auto 0;
+    }
+    #sheet-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 12px 20px 10px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    #stop-code {
+      font-size: 11px; color: #1565C0; font-weight: 700;
+      letter-spacing: 0.5px; margin-bottom: 2px;
+    }
+    #stop-name { font-size: 17px; font-weight: 700; color: #111; line-height: 1.3; }
+    #close-btn {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: #f0f0f0; border: none; cursor: pointer;
+      font-size: 14px; color: #555; flex-shrink: 0; margin-left: 12px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .section-label {
+      font-size: 11px; font-weight: 700; color: #999; letter-spacing: 0.8px;
+      padding: 12px 20px 6px; text-transform: uppercase;
+    }
+    #arrivals-list { overflow-y: auto; flex: 1; }
+    .arrival-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 20px; border-bottom: 1px solid #f8f8f8;
+    }
+    .route-badge {
+      background: #E3F2FD; color: #1565C0; font-size: 12px; font-weight: 700;
+      padding: 3px 8px; border-radius: 6px; min-width: 44px; text-align: center;
+      white-space: nowrap;
+    }
+    .headsign { flex: 1; font-size: 13px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .arrival-time { font-size: 15px; font-weight: 700; color: #111; min-width: 52px; text-align: right; }
+    .arrival-time.soon { color: #E53935; }
+    .empty-arrivals { text-align: center; color: #aaa; font-size: 14px; padding: 24px 20px; }
+    .loading-arrivals { text-align: center; padding: 24px; }
+    .spinner { display: inline-block; width: 22px; height: 22px; border: 3px solid #eee; border-top-color: #1565C0; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Confirm button ── */
+    #confirm-section {
+      padding: 14px 20px 20px; border-top: 1px solid #f0f0f0;
+    }
+    #confirm-btn {
+      width: 100%; padding: 14px; background: #1565C0; color: white;
+      border: none; border-radius: 12px; font-size: 16px; font-weight: 700;
+      cursor: pointer; transition: background 0.15s;
+    }
+    #confirm-btn:hover { background: #1976D2; }
+    #confirm-btn:active { background: #0D47A1; }
+    #confirm-btn.sent { background: #2E7D32; }
+    #confirm-sub {
+      text-align: center; font-size: 12px; color: #999; margin-top: 8px;
+    }
+
+    /* ── Custom markers ── */
+    .bus-marker { font-size: 22px; line-height: 1; cursor: pointer; }
+    .stop-marker {
+      width: 14px; height: 14px; background: #1565C0;
+      border: 2px solid white; border-radius: 50%;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+    .stop-marker:hover { background: #0D47A1; transform: scale(1.3); }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <div>
+    <div class="tagline">🇲🇾 Real-time KL buses</div>
+    <h1>Bus Tracking MY</h1>
+  </div>
+  <div id="freshness">Connecting…</div>
+</div>
+
+<div id="map"></div>
+<div id="vehicle-count">Loading buses…</div>
+
+<!-- Bottom sheet -->
+<div id="sheet">
+  <div class="sheet-handle"></div>
+  <div id="sheet-header">
+    <div style="flex:1">
+      <div id="stop-code"></div>
+      <div id="stop-name"></div>
+    </div>
+    <button id="close-btn" onclick="closeSheet()">✕</button>
+  </div>
+  <div class="section-label">Scheduled Arrivals</div>
+  <div id="arrivals-list"><div class="loading-arrivals"><div class="spinner"></div></div></div>
+  <div id="confirm-section">
+    <button id="confirm-btn" onclick="handleConfirm()">🚌 Bus is here!</button>
+    <div id="confirm-sub">Help your fellow commuters — tap when the bus arrives</div>
+  </div>
+</div>
+
+<script>
+const PROXY = 'http://localhost:3001';
+let map, vehicleLayer, stopLayer;
+let selectedStop = null;
+let confirmCount = 0;
+let allStops = [];
+let allVehicles = [];
+let eventSource = null;
+
+// ── Init map centred on KL ──
+function initMap() {
+  map = L.map('map', { zoomControl: true }).setView([3.149, 101.6], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 18,
+  }).addTo(map);
+
+  vehicleLayer = L.layerGroup().addTo(map);
+  stopLayer = L.layerGroup().addTo(map);
+
+  map.on('moveend', loadNearbyStops);
+}
+
+// ── Vehicle positions ──
+function renderVehicles(vehicles) {
+  vehicleLayer.clearLayers();
+  allVehicles = vehicles;
+  vehicles.forEach(v => {
+    const icon = L.divIcon({ html: '<div class="bus-marker">🚌</div>', className: '', iconSize: [24, 24], iconAnchor: [12, 12] });
+    L.marker([v.lat, v.lng], { icon })
+      .bindTooltip(`${v.label || v.routeId}`, { direction: 'top', offset: [0, -10] })
+      .addTo(vehicleLayer);
+  });
+  document.getElementById('vehicle-count').textContent = `🚌 ${vehicles.length} buses live`;
+}
+
+// ── SSE stream ──
+function connectStream() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`${PROXY}/stream`);
+  eventSource.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'snapshot' && msg.vehicles) {
+      renderVehicles(msg.vehicles);
+      updateFreshness(msg.fetchedAt);
+    } else if (msg.type === 'update') {
+      // Re-fetch full vehicle list
+      fetch(`${PROXY}/vehicles`)
+        .then(r => r.json())
+        .then(d => {
+          const vehicles = (d.features || []).map(f => f.properties);
+          renderVehicles(vehicles);
+          updateFreshness(d.fetchedAt);
+        });
+    }
+  };
+  eventSource.onerror = () => {
+    document.getElementById('freshness').textContent = 'Reconnecting…';
+    setTimeout(connectStream, 5000);
+  };
+}
+
+function updateFreshness(ts) {
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  document.getElementById('freshness').textContent =
+    secs < 5 ? 'Live ●' : `Updated ${secs}s ago`;
+}
+
+setInterval(() => {
+  if (allVehicles.length && allVehicles[0]._ts) {
+    updateFreshness(allVehicles[0]._ts);
+  }
+}, 5000);
+
+// ── Nearby stops ──
+async function loadNearbyStops() {
+  const center = map.getCenter();
+  const zoom = map.getZoom();
+  if (zoom < 13) { stopLayer.clearLayers(); return; }
+
+  try {
+    const r = await fetch(`${PROXY}/stops/nearby?lat=${center.lat}&lng=${center.lng}&radius=1.5`);
+    const data = await r.json();
+    renderStops(data.stops || []);
+  } catch {}
+}
+
+function renderStops(stops) {
+  stopLayer.clearLayers();
+  allStops = stops;
+  stops.forEach(stop => {
+    const icon = L.divIcon({ html: '<div class="stop-marker"></div>', className: '', iconSize: [14, 14], iconAnchor: [7, 7] });
+    L.marker([stop.stop_lat, stop.stop_lon], { icon })
+      .on('click', () => openStop(stop))
+      .bindTooltip(stop.stop_name, { direction: 'top', offset: [0, -8] })
+      .addTo(stopLayer);
+  });
+}
+
+// ── Stop detail sheet ──
+async function openStop(stop) {
+  selectedStop = stop;
+  confirmCount = 0;
+  document.getElementById('stop-code').textContent = stop.stop_code || stop.stop_id;
+  document.getElementById('stop-name').textContent = stop.stop_name;
+  document.getElementById('arrivals-list').innerHTML = '<div class="loading-arrivals"><div class="spinner"></div></div>';
+  document.getElementById('confirm-btn').textContent = '🚌 Bus is here!';
+  document.getElementById('confirm-btn').className = '';
+  document.getElementById('confirm-sub').textContent = 'Help your fellow commuters — tap when the bus arrives';
+  document.getElementById('sheet').classList.add('open');
+
+  try {
+    const r = await fetch(`${PROXY}/arrivals/${encodeURIComponent(stop.stop_id)}`);
+    const data = await r.json();
+    renderArrivals(data.arrivals || []);
+  } catch {
+    document.getElementById('arrivals-list').innerHTML = '<div class="empty-arrivals">Could not load arrivals</div>';
+  }
+}
+
+function formatTime(timeStr) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const now = new Date();
+  const diffMin = (h * 60 + m) - (now.getHours() * 60 + now.getMinutes());
+  if (diffMin <= 0) return { text: 'Now', soon: true };
+  if (diffMin < 60) return { text: `${diffMin} min`, soon: diffMin <= 5 };
+  return { text: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`, soon: false };
+}
+
+function renderArrivals(arrivals) {
+  if (!arrivals.length) {
+    document.getElementById('arrivals-list').innerHTML = '<div class="empty-arrivals">No more arrivals today</div>';
+    return;
+  }
+  document.getElementById('arrivals-list').innerHTML = arrivals.map(a => {
+    const t = formatTime(a.arrival_time);
+    return `<div class="arrival-row">
+      <span class="route-badge">${a.route_name}</span>
+      <span class="headsign">${a.trip_headsign}</span>
+      <span class="arrival-time${t.soon ? ' soon' : ''}">${t.text}</span>
+    </div>`;
+  }).join('');
+}
+
+function closeSheet() {
+  document.getElementById('sheet').classList.remove('open');
+  selectedStop = null;
+}
+
+function handleConfirm() {
+  if (!selectedStop) return;
+  confirmCount++;
+  const btn = document.getElementById('confirm-btn');
+  btn.textContent = '✓ Confirmed!';
+  btn.className = 'sent';
+  document.getElementById('confirm-sub').textContent =
+    `You confirmed ${confirmCount} time${confirmCount > 1 ? 's' : ''} — thanks! Your location is logged.`;
+  setTimeout(() => {
+    btn.textContent = '🚌 Bus is here!';
+    btn.className = '';
+  }, 2500);
+  // In production this would POST to Firebase
+  console.log('Confirmation submitted for', selectedStop.stop_id);
+}
+
+// ── Boot ──
+initMap();
+connectStream();
+loadNearbyStops();
+
+// Initial vehicle load
+fetch(`${PROXY}/vehicles`)
+  .then(r => r.json())
+  .then(d => {
+    const vehicles = (d.features || []).map(f => f.properties);
+    renderVehicles(vehicles);
+    updateFreshness(d.fetchedAt);
+  });
+</script>
+</body>
+</html>
