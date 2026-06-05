@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Bus Tracking MY",
+    "slug": "bus-tracking-my",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "my.bustracking.app"
+    },
+    "android": {
+      "package": "my.bustracking.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#1565C0",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Bus Tracking MY to use your location to show nearby bus stops."
+        }
+      ],
+      "expo-status-bar"
+    ]
+  }
+}
