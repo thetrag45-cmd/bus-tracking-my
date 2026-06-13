@@ -107,6 +107,7 @@ type ArrivalRow = {
   departure_time: string;
   route_id: string;
   route_name: string;
+  category: string;
   trip_headsign: string;
   trip_id: string;
 };
@@ -142,6 +143,7 @@ function getUpcomingArrivals(stopId: string, limit = 6): ArrivalRow[] {
         st.departure_time,
         r.route_id,
         COALESCE(NULLIF(r.route_short_name,''), NULLIF(r.route_long_name,''), r.route_id) AS route_name,
+        r.category,
         t.trip_headsign,
         t.trip_id
       FROM stop_times st
@@ -168,12 +170,55 @@ type StopRow = {
   stop_lon: number;
 };
 
-function getNearbyStops(lat: number, lng: number, radiusKm = 0.5, limit = 20): StopRow[] {
+// Service type derived from GTFS category — drives the route badge colour
+// (feeder = green, trunk = blue) per the Moovit teardown / Godeez brand.
+function serviceType(category: string): "feeder" | "trunk" {
+  return category === "rapid-bus-mrtfeeder" ? "feeder" : "trunk";
+}
+
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+type RouteBadge = { route_name: string; service_type: "feeder" | "trunk" };
+
+// Distinct routes serving a stop — shown on the nearby-stops walk-time list.
+function getStopRoutes(stopId: string, limit = 8): RouteBadge[] {
   if (!db) return [];
-  // Haversine approximation using bounding box (fast, good enough at small radius)
+  const rows = db
+    .query<{ route_name: string; category: string }, [string, number]>(
+      `SELECT DISTINCT
+        COALESCE(NULLIF(r.route_short_name,''), NULLIF(r.route_long_name,''), r.route_id) AS route_name,
+        r.category
+       FROM stop_times st
+       JOIN trips t ON t.trip_id = st.trip_id
+       JOIN routes r ON r.route_id = t.route_id
+       WHERE st.stop_id = ?
+       ORDER BY route_name
+       LIMIT ?`
+    )
+    .all(stopId, limit);
+  return rows.map((r) => ({ route_name: r.route_name, service_type: serviceType(r.category) }));
+}
+
+type NearbyStop = StopRow & {
+  walk_m: number;
+  walk_min: number;
+  routes: RouteBadge[];
+};
+
+function getNearbyStops(lat: number, lng: number, radiusKm = 0.5, limit = 20): NearbyStop[] {
+  if (!db) return [];
+  // Bounding-box prefilter (fast), then exact haversine sort + walk-time.
   const latDelta = radiusKm / 111;
   const lngDelta = radiusKm / (111 * Math.cos((lat * Math.PI) / 180));
-  return db
+  const rows = db
     .query<StopRow, [number, number, number, number, number]>(
       `SELECT stop_id, stop_code, stop_name, stop_lat, stop_lon,
         (stop_lat - ?) * (stop_lat - ?) + (stop_lon - ?) * (stop_lon - ?) AS dist_sq
@@ -183,6 +228,108 @@ function getNearbyStops(lat: number, lng: number, radiusKm = 0.5, limit = 20): S
        LIMIT ?`
     )
     .all(lat, lat, lng, lng, lat - latDelta, lat + latDelta, lng - lngDelta, lng + lngDelta, limit);
+
+  return rows
+    .map((s) => {
+      const walk_m = haversineM(lat, lng, s.stop_lat, s.stop_lon);
+      return {
+        ...s,
+        walk_m: Math.round(walk_m),
+        walk_min: Math.max(1, Math.round(walk_m / 80)), // ~80 m/min walking pace
+        routes: getStopRoutes(s.stop_id),
+      };
+    })
+    .sort((a, b) => a.walk_m - b.walk_m);
+}
+
+// ── Line detail (route shape + ordered stop timeline + direction toggle) ───────
+
+type LineRow = { route_id: string; route_name: string; category: string };
+
+function getLines(): (LineRow & { service_type: "feeder" | "trunk" })[] {
+  if (!db) return [];
+  const rows = db
+    .query<LineRow, []>(
+      `SELECT route_id,
+        COALESCE(NULLIF(route_short_name,''), NULLIF(route_long_name,''), route_id) AS route_name,
+        category
+       FROM routes
+       ORDER BY route_name`
+    )
+    .all();
+  return rows.map((r) => ({ ...r, service_type: serviceType(r.category) }));
+}
+
+type LineStop = {
+  stop_id: string;
+  stop_code: string;
+  stop_name: string;
+  stop_lat: number;
+  stop_lon: number;
+  stop_sequence: number;
+};
+
+function getLineDetail(routeId: string) {
+  if (!db) return null;
+  const route = db
+    .query<LineRow, [string]>(
+      `SELECT route_id,
+        COALESCE(NULLIF(route_short_name,''), NULLIF(route_long_name,''), route_id) AS route_name,
+        category
+       FROM routes WHERE route_id = ?`
+    )
+    .get(routeId);
+  if (!route) return null;
+
+  const dirs = db
+    .query<{ direction_id: number }, [string]>(
+      `SELECT DISTINCT direction_id FROM trips WHERE route_id = ? ORDER BY direction_id`
+    )
+    .all(routeId);
+
+  const directions = dirs.map((d) => {
+    // Representative trip for this direction = the one visiting the most stops.
+    const rep = db
+      .query<{ trip_id: string; trip_headsign: string; shape_id: string; nstops: number }, [string, number]>(
+        `SELECT t.trip_id, t.trip_headsign, t.shape_id, COUNT(st.id) AS nstops
+         FROM trips t JOIN stop_times st ON st.trip_id = t.trip_id
+         WHERE t.route_id = ? AND t.direction_id = ?
+         GROUP BY t.trip_id ORDER BY nstops DESC LIMIT 1`
+      )
+      .get(routeId, d.direction_id);
+    if (!rep) return { direction_id: d.direction_id, headsign: "", stops: [], shape: [] };
+
+    const stops = db
+      .query<LineStop, [string]>(
+        `SELECT s.stop_id, s.stop_code, s.stop_name, s.stop_lat, s.stop_lon, st.stop_sequence
+         FROM stop_times st JOIN stops s ON s.stop_id = st.stop_id
+         WHERE st.trip_id = ? ORDER BY st.stop_sequence`
+      )
+      .all(rep.trip_id);
+
+    const shape = rep.shape_id
+      ? db
+          .query<{ shape_pt_lat: number; shape_pt_lon: number }, [string]>(
+            `SELECT shape_pt_lat, shape_pt_lon FROM shapes WHERE shape_id = ? ORDER BY shape_pt_sequence`
+          )
+          .all(rep.shape_id)
+          .map((p) => [p.shape_pt_lat, p.shape_pt_lon] as [number, number])
+      : [];
+
+    return {
+      direction_id: d.direction_id,
+      headsign: rep.trip_headsign,
+      stops,
+      shape,
+    };
+  });
+
+  return {
+    route_id: route.route_id,
+    route_name: route.route_name,
+    service_type: serviceType(route.category),
+    directions,
+  };
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────
@@ -237,8 +384,25 @@ const server = Bun.serve({
     const arrivalMatch = url.pathname.match(/^\/arrivals\/(.+)$/);
     if (arrivalMatch) {
       const stopId = decodeURIComponent(arrivalMatch[1]);
-      const arrivals = getUpcomingArrivals(stopId);
+      const arrivals = getUpcomingArrivals(stopId).map((a) => ({
+        ...a,
+        service_type: serviceType(a.category),
+      }));
       return Response.json({ stopId, arrivals, fetchedAt: state.fetchedAt }, { headers: CORS });
+    }
+
+    // GET /lines — all routes with service type (for line browse / search)
+    if (url.pathname === "/lines") {
+      return Response.json({ lines: getLines() }, { headers: CORS });
+    }
+
+    // GET /route/:routeId — line detail: ordered stops + shape per direction
+    const routeMatch = url.pathname.match(/^\/route\/(.+)$/);
+    if (routeMatch) {
+      const routeId = decodeURIComponent(routeMatch[1]);
+      const detail = getLineDetail(routeId);
+      if (!detail) return Response.json({ error: "route not found" }, { status: 404, headers: CORS });
+      return Response.json(detail, { headers: CORS });
     }
 
     // GET /stops/nearby?lat=...&lng=...&radius=0.5

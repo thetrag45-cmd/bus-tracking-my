@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Bus Tracking MY",
+    "name": "Godeez",
     "slug": "bus-tracking-my",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -14,7 +14,7 @@
     "android": {
       "package": "my.bustracking.app",
       "adaptiveIcon": {
-        "backgroundColor": "#1565C0",
+        "backgroundColor": "#FFC93C",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -32,7 +32,7 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow Bus Tracking MY to use your location to show nearby bus stops."
+          "locationAlwaysAndWhenInUsePermission": "Godeez uses your location to show the bus stops nearest you."
         }
       ],
       "expo-status-bar"

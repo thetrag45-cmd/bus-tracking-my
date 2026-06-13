@@ -3,75 +3,109 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Bus Tracking MY</title>
+  <title>Godeez</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
+    /* Godeez brand tokens: yellow #FFC93C (chrome/badges/mascot), cream #FFF8EC,
+       charcoal #3A2F28, sky blue #3E9BD6 (movement: route lines + bus chips).
+       Semantics: green=go-now, amber=heads-up, grey=later.
+       Service-type tint (Moovit gap #3): trunk=sky #3E9BD6, feeder=teal #1B9E8A
+       — teal deliberately ≠ go-now green so the two greens never collide. */
+    :root {
+      --yellow: #FFC93C; --yellow-press: #F0B92E;
+      --cream: #FFF8EC; --card: #FFFFFF;
+      --ink: #3A2F28; --amberInk: #5C4708; --muted: #9A8B72; --faint: #B8A98E;
+      --line: #F0E8D6; --line2: #F5EEDD;
+      --sky: #3E9BD6; --teal: #1B9E8A;
+      --go: #1F6B3A; --goBg: #E6F4EA; --goBorder: #A5D6A7;
+      --soon: #C77B1E; --soonBg: #FBEFD8; --soonBorder: #F0C36B;
+      --later: #7A6E5E; --laterBg: #F0E8D6; --laterBorder: #E6DCC4;
+      --chip: #FFF1D6;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fff; overflow: hidden; }
+    body { font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--cream); color: var(--ink); overflow: hidden; }
 
     /* ── Header ── */
     #header {
       position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
-      background: #1565C0; color: white; height: 52px;
+      background: var(--yellow); color: var(--ink); height: 54px;
       display: flex; align-items: center; padding: 0 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      box-shadow: 0 2px 10px rgba(214,160,20,0.35);
     }
     #header-logo { display: flex; align-items: center; gap: 8px; flex: 1; }
-    #header-logo h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
-    #header-logo .flag { font-size: 18px; line-height: 1; }
+    #header-logo h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.3px; color: var(--ink); }
+    #mascot-mini { width: 30px; height: 30px; flex-shrink: 0; }
     #live-dot {
-      width: 8px; height: 8px; background: #69F0AE; border-radius: 50%;
-      animation: pulse-dot 2s ease-in-out infinite; flex-shrink: 0;
+      width: 8px; height: 8px; background: var(--go); border-radius: 50%;
+      animation: pulse-dot 2s ease-in-out infinite; flex-shrink: 0; margin-left: 2px;
     }
     @keyframes pulse-dot {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.5; transform: scale(0.8); }
+      50% { opacity: 0.4; transform: scale(0.8); }
     }
-    #freshness { font-size: 11px; opacity: 0.8; margin-left: 6px; white-space: nowrap; }
+    #freshness { font-size: 11px; font-weight: 600; color: var(--amberInk); opacity: 0.85; margin-left: 5px; white-space: nowrap; }
 
     /* ── Search bar ── */
-    #search-bar {
-      position: fixed; top: 60px; left: 12px; right: 12px; z-index: 900;
-    }
+    #search-bar { position: fixed; top: 60px; left: 12px; right: 12px; z-index: 900; }
     #search-input {
       width: 100%; padding: 10px 16px 10px 40px;
       border: none; border-radius: 24px; font-size: 14px;
-      background: white; color: #111;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
-      outline: none;
+      background: white; color: #111; box-shadow: 0 2px 12px rgba(0,0,0,0.18); outline: none;
     }
-    #search-input::placeholder { color: #aaa; }
+    #search-input::placeholder { color: #b8a98e; }
     #search-icon {
       position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
-      font-size: 16px; pointer-events: none;
+      font-size: 16px; pointer-events: none; color: var(--muted);
     }
     #search-results {
-      display: none; margin-top: 6px;
-      background: white; border-radius: 16px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-      max-height: 240px; overflow-y: auto;
+      display: none; margin-top: 6px; background: white; border-radius: 16px;
+      box-shadow: 0 4px 16px rgba(58,47,40,0.14); max-height: 240px; overflow-y: auto;
     }
     #search-results.visible { display: block; }
     .search-result {
-      padding: 12px 16px; border-bottom: 1px solid #f5f5f5;
+      padding: 12px 16px; border-bottom: 1px solid var(--line2);
       cursor: pointer; display: flex; align-items: center; gap: 10px;
     }
     .search-result:last-child { border-bottom: none; }
-    .search-result:hover, .search-result:active { background: #F3F8FF; }
+    .search-result:hover, .search-result:active { background: var(--cream); }
     .search-result-code {
-      font-size: 11px; font-weight: 700; color: #1565C0;
-      background: #E3F2FD; padding: 2px 6px; border-radius: 4px;
+      font-size: 11px; font-weight: 700; color: var(--amberInk);
+      background: var(--chip); padding: 2px 6px; border-radius: 5px;
       min-width: 36px; text-align: center; flex-shrink: 0;
     }
-    .search-result-name { font-size: 13px; color: #222; flex: 1; }
+    .search-result-name { font-size: 13px; color: var(--ink); flex: 1; }
+
+    /* ── Favourites chips (Moovit gap: Home/Work) ── */
+    #fav-row {
+      position: fixed; top: 104px; left: 12px; right: 12px; z-index: 880;
+      display: flex; gap: 8px; flex-wrap: wrap; pointer-events: none;
+    }
+    .fav-chip {
+      pointer-events: auto; display: inline-flex; align-items: center; gap: 6px;
+      background: white; border: 1.5px solid var(--line); color: var(--ink);
+      font-family: inherit; font-size: 12px; font-weight: 700;
+      padding: 7px 12px; border-radius: 20px; cursor: pointer;
+      box-shadow: 0 2px 8px rgba(58,47,40,0.10); transition: transform .12s;
+    }
+    .fav-chip:active { transform: scale(0.95); }
+    .fav-chip.unset { color: var(--muted); border-style: dashed; background: rgba(255,255,255,0.85); }
+    .fav-chip .fav-emoji { font-size: 14px; }
 
     /* ── Map ── */
-    #map { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; }
+    #map { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; background: var(--cream); }
+    /* Godeez art style on free OSM raster tiles — warms cold OSM to cream/pastel.
+       Tiles only; markers/route lines/labels live in other panes, stay full-colour. */
+    #map .leaflet-tile-pane {
+      filter: sepia(0.42) saturate(0.6) brightness(1.09) contrast(0.86) hue-rotate(-8deg);
+    }
 
     /* ── Locate me FAB ── */
     #locate-btn {
-      position: fixed; right: 14px; bottom: 28px; z-index: 900;
+      position: fixed; right: 14px; bottom: 96px; z-index: 900;
       width: 48px; height: 48px; border-radius: 50%;
       background: white; border: none; cursor: pointer;
       box-shadow: 0 3px 12px rgba(0,0,0,0.2);
@@ -82,181 +116,254 @@
     #locate-btn.locating { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Bus stop markers (SVG) ── */
+    /* ── Bus stop markers ── */
     .stop-dot {
-      width: 18px; height: 18px; background: #1565C0;
+      width: 18px; height: 18px; background: var(--ink);
       border: 2.5px solid white; border-radius: 50%;
-      box-shadow: 0 1px 5px rgba(0,0,0,0.35);
+      box-shadow: 0 1px 5px rgba(58,47,40,0.4);
       cursor: pointer; transition: transform 0.15s;
     }
-    .stop-dot:hover, .stop-dot:active { transform: scale(1.35); background: #0D47A1; }
-    .stop-dot.has-imminent { background: #E53935; animation: stop-pulse 1.5s ease-in-out infinite; }
+    .stop-dot:hover, .stop-dot:active { transform: scale(1.35); background: #000; }
+    .stop-dot.has-imminent { background: var(--soon); animation: stop-pulse 1.5s ease-in-out infinite; }
+    .stop-dot.on-line { background: var(--sky); width: 14px; height: 14px; }
     @keyframes stop-pulse {
-      0%, 100% { box-shadow: 0 1px 5px rgba(229,57,53,0.4); }
-      50% { box-shadow: 0 0 0 6px rgba(229,57,53,0.15); }
+      0%, 100% { box-shadow: 0 1px 5px rgba(199,123,30,0.45); }
+      50% { box-shadow: 0 0 0 6px rgba(199,123,30,0.18); }
     }
 
-    /* ── Bottom sheet ── */
-    #sheet {
+    /* ── Nearby peek bar (Moovit gap: nearby sorted by walk-time) ── */
+    #nearby-peek {
+      position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 850;
+      background: white; border-radius: 16px; box-shadow: 0 4px 18px rgba(58,47,40,0.16);
+      padding: 12px 14px; display: flex; align-items: center; gap: 10px; cursor: pointer;
+      transition: transform .15s; border: 1.5px solid var(--line);
+    }
+    #nearby-peek:active { transform: scale(0.98); }
+    #nearby-peek .np-icon { font-size: 18px; }
+    #nearby-peek .np-text { flex: 1; }
+    #nearby-peek .np-title { font-size: 13px; font-weight: 800; }
+    #nearby-peek .np-sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    #nearby-peek .np-chev { color: var(--faint); font-weight: 800; }
+
+    /* ── Generic bottom sheet ── */
+    .sheet {
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
-      background: white; border-radius: 20px 20px 0 0;
-      box-shadow: 0 -4px 24px rgba(0,0,0,0.14);
+      background: var(--cream); border-radius: 22px 22px 0 0;
+      box-shadow: 0 -4px 24px rgba(58,47,40,0.16);
       transform: translateY(100%);
       transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
-      max-height: 70vh; display: flex; flex-direction: column;
-      will-change: transform;
+      max-height: 78vh; display: flex; flex-direction: column; will-change: transform;
     }
-    #sheet.open { transform: translateY(0); }
+    .sheet.open { transform: translateY(0); }
     .sheet-handle {
-      width: 36px; height: 4px; background: #e0e0e0; border-radius: 2px;
+      width: 36px; height: 4px; background: #E6DCC4; border-radius: 2px;
       margin: 10px auto 6px; flex-shrink: 0;
     }
-
-    /* ── Stop header ── */
-    #sheet-header {
-      padding: 6px 16px 12px; border-bottom: 1px solid #f2f2f2; flex-shrink: 0;
+    .sheet-head {
+      padding: 6px 16px 12px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+      display: flex; align-items: flex-start; justify-content: space-between;
     }
-    #sheet-header-row { display: flex; align-items: flex-start; justify-content: space-between; }
-    #stop-meta { flex: 1; }
-    #stop-badge-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    #stop-code-chip {
-      font-size: 11px; font-weight: 700; color: #1565C0;
-      background: #E3F2FD; padding: 2px 8px; border-radius: 20px;
-    }
-    #stop-distance { font-size: 11px; color: #888; }
-    #stop-name { font-size: 16px; font-weight: 700; color: #111; line-height: 1.3; }
-    #close-btn {
+    .sheet-title { font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.3; }
+    .close-btn {
       width: 30px; height: 30px; border-radius: 50%;
-      background: #f5f5f5; border: none; cursor: pointer;
-      font-size: 13px; color: #666; flex-shrink: 0; margin-left: 12px;
+      background: var(--line); border: none; cursor: pointer;
+      font-size: 13px; color: #7A6E5E; flex-shrink: 0; margin-left: 12px;
       display: flex; align-items: center; justify-content: center;
     }
 
-    /* ── Next bus hero ── */
+    /* ── Stop sheet specifics ── */
+    #stop-badge-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    #stop-code-chip { font-size: 11px; font-weight: 700; color: var(--amberInk); background: var(--chip); padding: 2px 8px; border-radius: 20px; }
+    #stop-distance { font-size: 11px; color: var(--muted); }
+    #stop-name { font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.3; }
+
     #next-bus-hero {
-      margin: 12px 16px 0; padding: 14px 16px;
-      border-radius: 14px; flex-shrink: 0;
-      background: #E8F5E9; border: 1.5px solid #A5D6A7;
+      margin: 12px 16px 0; padding: 14px 16px; border-radius: 16px; flex-shrink: 0;
+      background: var(--laterBg); border: 1.5px solid var(--laterBorder);
       display: flex; align-items: center; gap: 12px;
     }
-    #next-bus-hero.soon { background: #FFF3E0; border-color: #FFCC02; }
-    #next-bus-hero.urgent { background: #FFEBEE; border-color: #EF9A9A; }
-    #next-bus-hero.empty { background: #F5F5F5; border-color: #E0E0E0; }
-    #next-bus-time {
-      font-size: 36px; font-weight: 800; color: #2E7D32; line-height: 1;
-      min-width: 72px; text-align: center;
-    }
-    #next-bus-hero.soon #next-bus-time { color: #E65100; }
-    #next-bus-hero.urgent #next-bus-time { color: #C62828; }
-    #next-bus-hero.empty #next-bus-time { font-size: 22px; color: #999; }
-    #next-bus-label { font-size: 11px; color: #555; margin-top: 2px; }
+    #next-bus-hero.arriving { background: var(--goBg); border-color: var(--goBorder); }
+    #next-bus-hero.soon { background: var(--soonBg); border-color: var(--soonBorder); }
+    #next-bus-hero.later, #next-bus-hero.empty { background: var(--laterBg); border-color: var(--laterBorder); }
+    #next-bus-time { font-size: 38px; font-weight: 800; color: var(--ink); line-height: 1; min-width: 76px; text-align: center; }
+    #next-bus-hero.arriving #next-bus-time { color: var(--go); }
+    #next-bus-hero.soon #next-bus-time { color: var(--soon); }
+    #next-bus-hero.later #next-bus-time { color: var(--later); }
+    #next-bus-hero.empty #next-bus-time { font-size: 22px; color: #A99A82; }
+    #next-bus-label { font-size: 11px; color: var(--later); font-weight: 600; margin-top: 2px; }
     #next-bus-info { flex: 1; }
-    #next-bus-route { font-size: 15px; font-weight: 700; color: #111; }
-    #next-bus-headsign { font-size: 12px; color: #666; margin-top: 2px; }
-    .next-bus-unit { font-size: 14px; font-weight: 600; }
+    #next-bus-route { font-size: 15px; font-weight: 800; color: var(--ink); }
+    #next-bus-headsign { font-size: 12px; color: var(--later); margin-top: 2px; }
+    .next-bus-unit { font-size: 14px; font-weight: 700; }
 
-    /* ── Arrivals list ── */
+    /* Save-as-favourite controls inside stop sheet */
+    #fav-actions { display: flex; gap: 8px; padding: 10px 16px 0; flex-shrink: 0; }
+    .fav-set-btn {
+      flex: 1; padding: 9px; border-radius: 12px; border: 1.5px solid var(--line);
+      background: white; font-family: inherit; font-size: 12px; font-weight: 700;
+      color: var(--ink); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .fav-set-btn:active { background: var(--cream); }
+    .fav-set-btn.active { background: var(--chip); border-color: var(--yellow); color: var(--amberInk); }
+
     #arrivals-section { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
     .arrivals-label {
-      font-size: 11px; font-weight: 700; color: #bbb; letter-spacing: 0.8px;
+      font-size: 11px; font-weight: 700; color: var(--faint); letter-spacing: 0.8px;
       padding: 12px 16px 6px; text-transform: uppercase;
     }
     .arrival-row {
       display: flex; align-items: center; gap: 10px;
-      padding: 10px 16px; border-bottom: 1px solid #fafafa;
+      padding: 10px 16px; border-bottom: 1px solid var(--line2); cursor: pointer;
     }
     .arrival-row:last-child { border-bottom: none; }
+    .arrival-row:active { background: var(--line2); }
     .arr-route {
-      min-width: 46px; text-align: center;
-      font-size: 12px; font-weight: 700; color: #1565C0;
-      background: #E3F2FD; padding: 4px 6px; border-radius: 6px;
+      min-width: 50px; text-align: center; font-size: 12px; font-weight: 800;
+      padding: 4px 6px; border-radius: 6px; color: white;
     }
-    .arr-headsign { flex: 1; font-size: 13px; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .arr-time {
-      font-size: 14px; font-weight: 700; min-width: 50px; text-align: right;
-      padding: 4px 8px; border-radius: 8px;
-    }
-    .arr-time.green { color: #2E7D32; background: #E8F5E9; }
-    .arr-time.amber { color: #E65100; background: #FFF3E0; }
-    .arr-time.grey { color: #888; background: #F5F5F5; }
+    .arr-route.trunk { background: var(--sky); }
+    .arr-route.feeder { background: var(--teal); }
+    .arr-headsign { flex: 1; font-size: 13px; color: #5A4F42; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .arr-go { font-size: 10px; color: var(--muted); font-weight: 700; }
+    .arr-time { font-size: 14px; font-weight: 700; min-width: 50px; text-align: right; padding: 4px 8px; border-radius: 8px; }
+    .arr-time.green { color: var(--go); background: var(--goBg); }
+    .arr-time.amber { color: var(--soon); background: var(--soonBg); }
+    .arr-time.grey { color: var(--muted); background: var(--laterBg); }
     .loading-row { padding: 28px; display: flex; justify-content: center; }
-    .spinner { width: 22px; height: 22px; border: 3px solid #eee; border-top-color: #1565C0; border-radius: 50%; animation: spin-s 0.8s linear infinite; }
+    .spinner { width: 22px; height: 22px; border: 3px solid var(--line); border-top-color: var(--yellow); border-radius: 50%; animation: spin-s 0.8s linear infinite; }
     @keyframes spin-s { to { transform: rotate(360deg); } }
-    .empty-arrivals { padding: 24px 16px; text-align: center; color: #bbb; font-size: 14px; }
+    .empty-arrivals { padding: 24px 16px; text-align: center; color: var(--faint); font-size: 14px; }
 
-    /* ── Confirm button ── */
-    #confirm-section {
-      padding: 12px 16px 20px; flex-shrink: 0;
-      border-top: 1px solid #f2f2f2;
-    }
+    #confirm-section { padding: 12px 16px 20px; flex-shrink: 0; border-top: 1px solid var(--line); }
     #confirm-btn {
-      width: 100%; padding: 14px; background: #1565C0; color: white;
-      border: none; border-radius: 14px; font-size: 15px; font-weight: 700;
-      cursor: pointer; transition: all 0.15s; display: flex; align-items: center;
-      justify-content: center; gap: 8px;
+      width: 100%; padding: 14px; background: var(--yellow); color: var(--amberInk);
+      border: none; border-radius: 14px; font-size: 15px; font-weight: 800;
+      cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 8px;
     }
-    #confirm-btn:active { transform: scale(0.97); background: #0D47A1; }
-    #confirm-btn.sent { background: #2E7D32; }
-    #confirm-sub { text-align: center; font-size: 11px; color: #bbb; margin-top: 6px; }
+    #confirm-btn:active { transform: scale(0.97); background: var(--yellow-press); }
+    #confirm-btn.sent { background: var(--goBg); color: var(--go); }
+    #confirm-sub { text-align: center; font-size: 11px; color: var(--faint); margin-top: 6px; }
+    #scheduled-notice { display: flex; align-items: center; gap: 6px; padding: 6px 16px 0; font-size: 11px; color: var(--faint); flex-shrink: 0; }
+    #scheduled-notice::before { content: 'ℹ'; font-size: 11px; }
 
-    /* ── Overlay backdrop ── */
-    #backdrop {
-      display: none; position: fixed; inset: 0; z-index: 999;
-      background: rgba(0,0,0,0.25);
+    /* ── Line detail sheet (Moovit gap: route shape + ordered timeline + dir toggle) ── */
+    #line-pill {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 800;
+      color: white; padding: 4px 10px; border-radius: 20px; margin-bottom: 4px;
     }
+    #line-pill.trunk { background: var(--sky); }
+    #line-pill.feeder { background: var(--teal); }
+    #line-headsign { font-size: 13px; color: var(--later); font-weight: 600; }
+    #dir-toggle { display: flex; gap: 8px; padding: 10px 16px 4px; flex-shrink: 0; }
+    .dir-btn {
+      flex: 1; padding: 9px; border-radius: 12px; border: 1.5px solid var(--line);
+      background: white; font-family: inherit; font-size: 12px; font-weight: 700;
+      color: var(--later); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .dir-btn.active { background: var(--ink); color: white; border-color: var(--ink); }
+    #line-stops { flex: 1; overflow-y: auto; padding: 8px 16px 20px; -webkit-overflow-scrolling: touch; }
+    .line-stop { display: flex; align-items: center; gap: 12px; padding: 7px 0; cursor: pointer; position: relative; }
+    .line-stop:active { opacity: 0.6; }
+    .line-stop-rail { width: 16px; display: flex; flex-direction: column; align-items: center; align-self: stretch; }
+    .line-stop-node { width: 12px; height: 12px; border-radius: 50%; background: white; border: 3px solid var(--sky); flex-shrink: 0; z-index: 1; }
+    .line-stop.feeder .line-stop-node { border-color: var(--teal); }
+    .line-stop-line { width: 3px; flex: 1; background: var(--sky); }
+    .line-stop.feeder .line-stop-line { background: var(--teal); }
+    .line-stop.first .line-stop-line.top, .line-stop.last .line-stop-line.bottom { background: transparent; }
+    .line-stop-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--ink); padding: 4px 0; }
+    .line-stop-code { font-size: 10px; color: var(--faint); }
+
+    /* ── Out-of-region overlay (Moovit gap: empty state + area picker) ── */
+    #region-overlay {
+      display: none; position: fixed; inset: 0; z-index: 1100; background: var(--cream);
+      flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center;
+    }
+    #region-overlay.visible { display: flex; }
+    #region-overlay svg { width: 96px; height: 96px; margin-bottom: 8px; }
+    #region-overlay h2 { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+    #region-overlay p { font-size: 14px; color: var(--later); max-width: 300px; line-height: 1.5; margin-bottom: 22px; }
+    #region-overlay .area-label { font-size: 11px; font-weight: 700; color: var(--faint); letter-spacing: .8px; text-transform: uppercase; margin-bottom: 10px; }
+    .area-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 320px; }
+    .area-btn {
+      padding: 14px; border-radius: 14px; border: 1.5px solid var(--line); background: white;
+      font-family: inherit; font-size: 14px; font-weight: 700; color: var(--ink); cursor: pointer;
+    }
+    .area-btn:active { background: var(--chip); }
+
+    /* ── Backdrop ── */
+    #backdrop { display: none; position: fixed; inset: 0; z-index: 999; background: rgba(58,47,40,0.22); }
     #backdrop.visible { display: block; }
 
-    /* ── Scheduled notice ── */
-    #scheduled-notice {
-      display: flex; align-items: center; gap: 6px;
-      padding: 6px 16px 0; font-size: 11px; color: #aaa; flex-shrink: 0;
+    /* toast */
+    #toast {
+      position: fixed; bottom: 92px; left: 50%; transform: translateX(-50%) translateY(20px);
+      background: var(--ink); color: white; font-size: 13px; font-weight: 700;
+      padding: 10px 18px; border-radius: 22px; z-index: 1200; opacity: 0; pointer-events: none;
+      transition: all .25s; box-shadow: 0 4px 16px rgba(0,0,0,0.25);
     }
-    #scheduled-notice::before { content: 'ℹ'; font-size: 11px; }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
 
 <div id="header">
   <div id="header-logo">
-    <span class="flag">🇲🇾</span>
-    <h1>Bus Tracking MY</h1>
+    <svg id="mascot-mini" viewBox="0 0 52 52" aria-hidden="true">
+      <ellipse cx="26" cy="32" rx="18" ry="17" fill="#3A2F28" opacity="0.12"/>
+      <ellipse cx="26" cy="30" rx="18" ry="17" fill="#FFE08A"/>
+      <circle cx="26" cy="15" r="12" fill="#FFE08A"/>
+      <circle cx="22" cy="14" r="2" fill="#3A2F28"/>
+      <circle cx="31" cy="14" r="2" fill="#3A2F28"/>
+      <ellipse cx="18" cy="18" rx="2.2" ry="1.5" fill="#FF9E80" opacity="0.7"/>
+      <ellipse cx="35" cy="18" rx="2.2" ry="1.5" fill="#FF9E80" opacity="0.7"/>
+      <path d="M23 18 q3 3 6 0" stroke="#3A2F28" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    </svg>
+    <h1>Godeez</h1>
     <div id="live-dot"></div>
-    <span id="freshness">Connecting…</span>
+    <span id="freshness">Saying hi…</span>
   </div>
 </div>
 
 <div id="search-bar">
   <div style="position:relative">
     <span id="search-icon">🔍</span>
-    <input id="search-input" type="text" placeholder="Search for a bus stop…" autocomplete="off" />
+    <input id="search-input" type="text" placeholder="Find your stop…" autocomplete="off" />
   </div>
   <div id="search-results"></div>
 </div>
 
+<div id="fav-row"></div>
+
 <div id="map"></div>
 
-<button id="locate-btn" title="Centre on my location">📍</button>
+<button id="locate-btn" title="Find buses near me">📍</button>
 
-<div id="backdrop" onclick="closeSheet()"></div>
+<!-- Nearby peek bar -->
+<div id="nearby-peek" onclick="openNearby()">
+  <span class="np-icon">🚏</span>
+  <div class="np-text">
+    <div class="np-title" id="np-title">Stops near you</div>
+    <div class="np-sub" id="np-sub">Tap to see the closest stops</div>
+  </div>
+  <span class="np-chev">›</span>
+</div>
 
-<!-- Bottom sheet -->
-<div id="sheet">
+<div id="backdrop" onclick="closeAll()"></div>
+
+<!-- Stop detail sheet -->
+<div id="sheet" class="sheet">
   <div class="sheet-handle"></div>
-
-  <div id="sheet-header">
-    <div id="sheet-header-row">
-      <div id="stop-meta">
-        <div id="stop-badge-row">
-          <span id="stop-code-chip"></span>
-          <span id="stop-distance"></span>
-        </div>
-        <div id="stop-name"></div>
+  <div class="sheet-head">
+    <div style="flex:1">
+      <div id="stop-badge-row">
+        <span id="stop-code-chip"></span>
+        <span id="stop-distance"></span>
       </div>
-      <button id="close-btn" onclick="closeSheet()">✕</button>
+      <div id="stop-name"></div>
     </div>
+    <button class="close-btn" onclick="closeSheet()">✕</button>
   </div>
 
-  <!-- Next bus hero -->
   <div id="next-bus-hero" class="empty">
     <div>
       <div id="next-bus-time">—</div>
@@ -268,127 +375,172 @@
     </div>
   </div>
 
-  <div id="scheduled-notice">Scheduled times — live delays available in 2026</div>
+  <div id="fav-actions">
+    <button class="fav-set-btn" id="set-home" onclick="toggleFav('home')"><span>🏠</span> Save as Home</button>
+    <button class="fav-set-btn" id="set-work" onclick="toggleFav('work')"><span>💼</span> Save as Work</button>
+  </div>
 
-  <!-- All arrivals -->
+  <div id="scheduled-notice">Scheduled times for now — live arrivals coming soon</div>
+
   <div id="arrivals-section">
-    <div class="arrivals-label">Upcoming arrivals</div>
+    <div class="arrivals-label">Next buses · tap a route to see its line</div>
     <div id="arrivals-list"><div class="loading-row"><div class="spinner"></div></div></div>
   </div>
 
-  <!-- Confirm -->
   <div id="confirm-section">
     <button id="confirm-btn" onclick="handleConfirm()">
-      <span>🚌</span> <span id="confirm-label">Bus is here — tap to confirm</span>
+      <span>🚌</span> <span id="confirm-label">Bus is here? Tap to confirm</span>
     </button>
-    <div id="confirm-sub">Help your fellow commuters. Your location is logged anonymously.</div>
+    <div id="confirm-sub">Help your fellow commuters. Your spot is shared anonymously.</div>
   </div>
 </div>
 
+<!-- Line detail sheet -->
+<div id="line-sheet" class="sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head">
+    <div style="flex:1">
+      <span id="line-pill" class="trunk"></span>
+      <div id="line-headsign"></div>
+    </div>
+    <button class="close-btn" onclick="closeLine()">✕</button>
+  </div>
+  <div id="dir-toggle"></div>
+  <div class="arrivals-label" style="padding-bottom:0">Stops on this line</div>
+  <div id="line-stops"><div class="loading-row"><div class="spinner"></div></div></div>
+</div>
+
+<!-- Nearby stops sheet -->
+<div id="nearby-sheet" class="sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head">
+    <div class="sheet-title">Stops near you</div>
+    <button class="close-btn" onclick="closeNearby()">✕</button>
+  </div>
+  <div class="arrivals-label" style="padding-bottom:0">Sorted by walking time</div>
+  <div id="nearby-list" style="flex:1;overflow-y:auto;padding-bottom:20px"><div class="loading-row"><div class="spinner"></div></div></div>
+</div>
+
+<!-- Out-of-region overlay -->
+<div id="region-overlay">
+  <svg viewBox="0 0 52 52" aria-hidden="true">
+    <ellipse cx="26" cy="34" rx="20" ry="18" fill="#3A2F28" opacity="0.10"/>
+    <ellipse cx="26" cy="31" rx="20" ry="18" fill="#FFE08A"/>
+    <circle cx="26" cy="14" r="13" fill="#FFE08A"/>
+    <circle cx="21" cy="13" r="2.2" fill="#3A2F28"/>
+    <circle cx="31" cy="13" r="2.2" fill="#3A2F28"/>
+    <ellipse cx="16" cy="17" rx="2.4" ry="1.6" fill="#FF9E80" opacity="0.7"/>
+    <ellipse cx="36" cy="17" rx="2.4" ry="1.6" fill="#FF9E80" opacity="0.7"/>
+    <path d="M22 18 q4 2 8 0" stroke="#3A2F28" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  </svg>
+  <h2>Godeez isn't here yet</h2>
+  <p>We're live across the Klang Valley right now. Hop to a covered area to take a look:</p>
+  <div class="area-label">Jump to coverage</div>
+  <div class="area-grid">
+    <button class="area-btn" onclick="jumpToArea(3.1342,101.6865)">KL Sentral</button>
+    <button class="area-btn" onclick="jumpToArea(3.1073,101.6068)">Petaling Jaya</button>
+    <button class="area-btn" onclick="jumpToArea(3.1578,101.7117)">KLCC</button>
+    <button class="area-btn" onclick="jumpToArea(3.0738,101.5183)">Shah Alam</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
 <script>
 const PROXY = 'http://localhost:3001';
-let map, vehicleLayer, stopLayer, userMarker;
-let selectedStop = null;
-let confirmCount = 0;
-let allStops = [];
-let userLocation = null; // { lat, lng }
-let eventSource = null;
+// Klang Valley coverage centre + radius (out-of-region detection, Moovit gap #4)
+const COVERAGE = { lat: 3.139, lng: 101.687, radiusKm: 60 };
+let map, vehicleLayer, stopLayer, shapeLayer, userMarker;
+let selectedStop = null, currentLine = null, currentDir = 0;
+let confirmCount = 0, allStops = [], userLocation = null, eventSource = null;
+let favs = loadFavs();
 
-// ── Map init ──────────────────────────────────────────────────────────────────
+// ── Map init ──
 function initMap() {
-  map = L.map('map', { zoomControl: false, attributionControl: true })
-    .setView([3.149, 101.66], 13);
+  map = L.map('map', { zoomControl: false, attributionControl: true }).setView([3.149, 101.66], 13);
   L.control.zoom({ position: 'bottomleft' }).addTo(map);
-
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© <a href="https://openstreetmap.org">OSM</a>',
-    maxZoom: 19,
+    attribution: '© <a href="https://openstreetmap.org">OSM</a>', maxZoom: 19,
   }).addTo(map);
-
+  shapeLayer = L.layerGroup().addTo(map);   // route polylines (under markers)
   vehicleLayer = L.layerGroup().addTo(map);
   stopLayer = L.layerGroup().addTo(map);
-
   map.on('moveend', loadNearbyStops);
   map.on('click', () => { if (selectedStop) closeSheet(); });
-
-  // Try to locate user on load
+  loadNearbyStops(); // show stops immediately, before/without a geolocation fix
   locateUser();
 }
 
-// ── Geolocation ───────────────────────────────────────────────────────────────
+// ── Geolocation ──
 function locateUser() {
   if (!navigator.geolocation) return;
   document.getElementById('locate-btn').classList.add('locating');
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      map.setView([userLocation.lat, userLocation.lng], 15);
-      updateUserMarker();
       document.getElementById('locate-btn').classList.remove('locating');
+      if (haversineM(userLocation.lat, userLocation.lng, COVERAGE.lat, COVERAGE.lng) > COVERAGE.radiusKm * 1000) {
+        showRegionOverlay();
+      } else {
+        map.setView([userLocation.lat, userLocation.lng], 15);
+        updateUserMarker();
+        refreshNearbyPeek();
+      }
     },
     () => { document.getElementById('locate-btn').classList.remove('locating'); },
     { timeout: 8000, maximumAge: 30000 }
   );
 }
-
 function updateUserMarker() {
   if (!userLocation) return;
   if (userMarker) userMarker.remove();
   const icon = L.divIcon({
-    html: `<div style="width:16px;height:16px;background:#2979FF;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(41,121,255,0.25)"></div>`,
+    html: `<div style="width:16px;height:16px;background:#3E9BD6;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(62,155,214,0.25)"></div>`,
     className: '', iconSize: [16, 16], iconAnchor: [8, 8],
   });
   userMarker = L.marker([userLocation.lat, userLocation.lng], { icon, zIndexOffset: 500 })
-    .bindTooltip('You are here', { direction: 'top', offset: [0, -10] })
-    .addTo(map);
+    .bindTooltip('You are here', { direction: 'top', offset: [0, -10] }).addTo(map);
 }
-
 document.getElementById('locate-btn').addEventListener('click', () => {
-  if (userLocation) {
-    map.setView([userLocation.lat, userLocation.lng], 15);
-  } else {
-    locateUser();
-  }
+  if (userLocation) map.setView([userLocation.lat, userLocation.lng], 15); else locateUser();
 });
 
-// ── Vehicle rendering ─────────────────────────────────────────────────────────
+// ── Region overlay / area picker ──
+function showRegionOverlay() { document.getElementById('region-overlay').classList.add('visible'); }
+function jumpToArea(lat, lng) {
+  document.getElementById('region-overlay').classList.remove('visible');
+  userLocation = { lat, lng };
+  map.setView([lat, lng], 15);
+  updateUserMarker();
+  loadNearbyStops().then(refreshNearbyPeek);
+}
+
+// ── Vehicles ──
 function renderVehicles(vehicles) {
   vehicleLayer.clearLayers();
-  // Deduplicate by position (cluster very close buses)
   vehicles.forEach(v => {
     const routeCode = v.label || v.routeId || '?';
     const icon = L.divIcon({
-      html: `<div style="
-        background: rgba(21,101,192,0.75);
-        color: white; font-size: 9px; font-weight: 700;
-        padding: 2px 4px; border-radius: 4px;
-        white-space: nowrap; line-height: 1.3;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-        pointer-events: none;
-      ">${routeCode}</div>`,
+      html: `<div style="background: rgba(62,155,214,0.92); color: white; font-size: 9px; font-weight: 800;
+        padding: 2px 5px; border-radius: 5px; white-space: nowrap; line-height: 1.3;
+        box-shadow: 0 1px 3px rgba(58,47,40,0.3); pointer-events: none; font-family: 'Nunito', sans-serif;">${routeCode}</div>`,
       className: '', iconAnchor: [0, 0],
     });
     L.marker([v.lat, v.lng], { icon, zIndexOffset: 200 })
-      .bindTooltip(
-        `<b>${routeCode}</b>${v.tripId ? '<br>Trip ' + v.tripId.slice(-6) : ''}`,
-        { direction: 'top', offset: [0, -4] }
-      )
+      .bindTooltip(`<b>${routeCode}</b>${v.tripId ? '<br>Trip ' + v.tripId.slice(-6) : ''}`, { direction: 'top', offset: [0, -4] })
       .addTo(vehicleLayer);
   });
 }
 
-// ── SSE stream ────────────────────────────────────────────────────────────────
+// ── SSE ──
 function connectStream() {
   if (eventSource) eventSource.close();
   eventSource = new EventSource(`${PROXY}/stream`);
   eventSource.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'snapshot' && msg.vehicles) {
-      renderVehicles(msg.vehicles);
-      updateFreshness(msg.fetchedAt);
-    } else if (msg.type === 'update') {
-      fetch(`${PROXY}/vehicles`)
-        .then(r => r.json())
+    if (msg.type === 'snapshot' && msg.vehicles) { renderVehicles(msg.vehicles); updateFreshness(msg.fetchedAt); }
+    else if (msg.type === 'update') {
+      fetch(`${PROXY}/vehicles`).then(r => r.json())
         .then(d => { renderVehicles((d.features||[]).map(f=>f.properties)); updateFreshness(d.fetchedAt); });
     }
   };
@@ -397,18 +549,13 @@ function connectStream() {
     setTimeout(connectStream, 5000);
   };
 }
-
 function updateFreshness(ts) {
   const secs = Math.round((Date.now() - ts) / 1000);
-  const el = document.getElementById('freshness');
-  el.textContent = secs < 5 ? 'Live' : `${secs}s ago`;
+  document.getElementById('freshness').textContent = secs < 5 ? 'Live' : `${secs}s ago`;
 }
-setInterval(() => {
-  // recalculate freshness without re-fetching
-  fetch(`${PROXY}/health`).then(r=>r.json()).then(d=>updateFreshness(d.fetchedAt)).catch(()=>{});
-}, 15000);
+setInterval(() => { fetch(`${PROXY}/health`).then(r=>r.json()).then(d=>updateFreshness(d.fetchedAt)).catch(()=>{}); }, 15000);
 
-// ── Nearby stops ──────────────────────────────────────────────────────────────
+// ── Nearby stops (map markers) ──
 async function loadNearbyStops() {
   const zoom = map.getZoom();
   if (zoom < 13) { stopLayer.clearLayers(); allStops = []; return; }
@@ -420,182 +567,316 @@ async function loadNearbyStops() {
     renderStops(data.stops || []);
   } catch {}
 }
-
 function renderStops(stops) {
   stopLayer.clearLayers();
   allStops = stops;
   stops.forEach(stop => {
-    const icon = L.divIcon({
-      html: `<div class="stop-dot"></div>`,
-      className: '', iconSize: [18, 18], iconAnchor: [9, 9],
-    });
+    const icon = L.divIcon({ html: `<div class="stop-dot"></div>`, className: '', iconSize: [18, 18], iconAnchor: [9, 9] });
     L.marker([stop.stop_lat, stop.stop_lon], { icon })
       .on('click', (e) => { L.DomEvent.stopPropagation(e); openStop(stop); })
-      .bindTooltip(stop.stop_name, { direction: 'top', offset: [0, -10], className: 'stop-tip' })
-      .addTo(stopLayer);
+      .bindTooltip(stop.stop_name, { direction: 'top', offset: [0, -10] }).addTo(stopLayer);
   });
 }
 
-// ── Distance helper ───────────────────────────────────────────────────────────
+// ── Geometry helpers ──
 function haversineM(lat1, lng1, lat2, lng2) {
   const R = 6371000, dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180;
   const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
-function formatDist(m) {
-  return m < 1000 ? `${Math.round(m)}m away` : `${(m/1000).toFixed(1)}km away`;
+function formatDist(m) { return m < 1000 ? `${Math.round(m)}m away` : `${(m/1000).toFixed(1)}km away`; }
+
+// ── Nearby peek + sheet (walk-time list) ──
+async function refreshNearbyPeek() {
+  const c = userLocation || map.getCenter();
+  const lat = c.lat, lng = c.lng;
+  try {
+    const r = await fetch(`${PROXY}/stops/nearby?lat=${lat}&lng=${lng}&radius=1.0`);
+    const d = await r.json();
+    const stops = d.stops || [];
+    if (stops.length) {
+      const s = stops[0];
+      document.getElementById('np-title').textContent = `${s.stop_name}`;
+      document.getElementById('np-sub').textContent = `${s.walk_min} min walk · ${stops.length} stops nearby`;
+    }
+  } catch {}
+}
+async function openNearby() {
+  document.getElementById('nearby-sheet').classList.add('open');
+  document.getElementById('backdrop').classList.add('visible');
+  const list = document.getElementById('nearby-list');
+  list.innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
+  const c = userLocation || map.getCenter();
+  try {
+    const r = await fetch(`${PROXY}/stops/nearby?lat=${c.lat}&lng=${c.lng}&radius=1.2`);
+    const d = await r.json();
+    const stops = d.stops || [];
+    if (!stops.length) { list.innerHTML = '<div class="empty-arrivals">No stops within walking distance</div>'; return; }
+    list.innerHTML = stops.map((s, i) => {
+      const badges = (s.routes||[]).slice(0,5).map(rt =>
+        `<span class="arr-route ${rt.service_type}" style="min-width:auto;padding:2px 6px;font-size:10px;display:inline-block">${rt.route_name}</span>`
+      ).join(' ');
+      return `<div class="arrival-row" onclick='openStopById(${JSON.stringify(s.stop_id)})' style="align-items:flex-start">
+        <div style="min-width:54px;text-align:center">
+          <div style="font-size:16px;font-weight:800;color:var(--ink)">${s.walk_min}</div>
+          <div style="font-size:9px;color:var(--muted);font-weight:700">MIN</div>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:var(--ink)">${s.stop_name}</div>
+          <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${badges || '<span style="font-size:11px;color:var(--faint)">—</span>'}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch { list.innerHTML = '<div class="empty-arrivals">Could not load nearby stops</div>'; }
+}
+function closeNearby() {
+  document.getElementById('nearby-sheet').classList.remove('open');
+  if (!selectedStop && !currentLine) document.getElementById('backdrop').classList.remove('visible');
+}
+async function openStopById(stopId) {
+  let stop = allStops.find(s => s.stop_id === stopId);
+  if (!stop) {
+    // fetch a fresh nearby set around current centre to resolve the stop
+    const c = userLocation || map.getCenter();
+    const r = await fetch(`${PROXY}/stops/nearby?lat=${c.lat}&lng=${c.lng}&radius=1.5`);
+    stop = ((await r.json()).stops || []).find(s => s.stop_id === stopId);
+  }
+  if (!stop) return;
+  closeNearby();
+  map.setView([stop.stop_lat, stop.stop_lon], 16);
+  openStop(stop);
 }
 
-// ── Stop detail sheet ─────────────────────────────────────────────────────────
+// ── Stop detail ──
 async function openStop(stop) {
   selectedStop = stop;
   confirmCount = 0;
-
-  // Stop header
   document.getElementById('stop-code-chip').textContent = stop.stop_code || stop.stop_id;
   document.getElementById('stop-name').textContent = stop.stop_name;
   const distEl = document.getElementById('stop-distance');
-  if (userLocation) {
-    const m = haversineM(userLocation.lat, userLocation.lng, stop.stop_lat, stop.stop_lon);
-    distEl.textContent = formatDist(m);
-  } else {
-    distEl.textContent = '';
-  }
-
-  // Reset hero + list
+  const ref = userLocation;
+  distEl.textContent = ref ? formatDist(haversineM(ref.lat, ref.lng, stop.stop_lat, stop.stop_lon)) : '';
   setHero(null);
   document.getElementById('arrivals-list').innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
   document.getElementById('confirm-btn').className = '';
-  document.getElementById('confirm-label').textContent = 'Bus is here — tap to confirm';
-  document.getElementById('confirm-sub').textContent = 'Help your fellow commuters. Your location is logged anonymously.';
-
-  // Open sheet + backdrop
+  document.getElementById('confirm-label').textContent = 'Bus is here? Tap to confirm';
+  document.getElementById('confirm-sub').textContent = 'Help your fellow commuters. Your spot is shared anonymously.';
+  syncFavButtons();
   document.getElementById('sheet').classList.add('open');
   document.getElementById('backdrop').classList.add('visible');
-
-  // Scroll search results away
   document.getElementById('search-results').classList.remove('visible');
   document.getElementById('search-input').blur();
-
-  // Pan map to show stop above the sheet
   map.panTo([stop.stop_lat, stop.stop_lon], { animate: true });
-
-  // Fetch arrivals
   try {
     const r = await fetch(`${PROXY}/arrivals/${encodeURIComponent(stop.stop_id)}`);
-    const data = await r.json();
-    renderArrivals(data.arrivals || []);
+    renderArrivals((await r.json()).arrivals || []);
   } catch {
     document.getElementById('arrivals-list').innerHTML = '<div class="empty-arrivals">Could not load arrivals</div>';
   }
 }
-
 function setHero(arrivals) {
   const hero = document.getElementById('next-bus-hero');
   if (!arrivals || arrivals.length === 0) {
     hero.className = 'empty';
     document.getElementById('next-bus-time').textContent = '—';
-    document.getElementById('next-bus-route').textContent = 'No more buses today';
+    document.getElementById('next-bus-route').textContent = "That's the last bus for today";
     document.getElementById('next-bus-headsign').textContent = '';
     return;
   }
   const first = arrivals[0];
   const t = parseDiff(first.arrival_time);
+  const label = document.getElementById('next-bus-label');
   document.getElementById('next-bus-route').textContent = first.route_name;
   document.getElementById('next-bus-headsign').textContent = first.trip_headsign;
-  if (t.diffMin <= 0) {
-    document.getElementById('next-bus-time').innerHTML = 'Now';
-    hero.className = 'urgent';
-  } else if (t.diffMin < 10) {
-    document.getElementById('next-bus-time').innerHTML = `${t.diffMin}<span class="next-bus-unit"> min</span>`;
-    hero.className = 'urgent';
-  } else if (t.diffMin < 20) {
-    document.getElementById('next-bus-time').innerHTML = `${t.diffMin}<span class="next-bus-unit"> min</span>`;
-    hero.className = 'soon';
-  } else {
-    document.getElementById('next-bus-time').innerHTML = `${t.text}`;
-    hero.className = '';
-  }
+  if (t.diffMin <= 0) { document.getElementById('next-bus-time').innerHTML = 'Now'; hero.className = 'arriving'; label.textContent = 'Go now'; }
+  else if (t.diffMin <= 5) { document.getElementById('next-bus-time').innerHTML = `${t.diffMin}<span class="next-bus-unit"> min</span>`; hero.className = 'arriving'; label.textContent = 'Go now'; }
+  else if (t.diffMin <= 15) { document.getElementById('next-bus-time').innerHTML = `${t.diffMin}<span class="next-bus-unit"> min</span>`; hero.className = 'soon'; label.textContent = 'Get ready'; }
+  else if (t.diffMin < 60) { document.getElementById('next-bus-time').innerHTML = `${t.diffMin}<span class="next-bus-unit"> min</span>`; hero.className = 'later'; label.textContent = 'Next bus'; }
+  else { document.getElementById('next-bus-time').innerHTML = `${t.text}`; hero.className = 'later'; label.textContent = 'Next bus'; }
 }
-
 function parseDiff(timeStr) {
   const [h, m] = timeStr.split(':').map(Number);
   const now = new Date();
   const diffMin = (h * 60 + m) - (now.getHours() * 60 + now.getMinutes());
-  const text = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-  return { diffMin, text };
+  return { diffMin, text: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}` };
 }
-
-function arrivalTimeClass(diffMin) {
-  if (diffMin <= 5) return 'green';
-  if (diffMin <= 15) return 'amber';
-  return 'grey';
-}
-
+function arrivalTimeClass(d) { return d <= 5 ? 'green' : d <= 15 ? 'amber' : 'grey'; }
 function renderArrivals(arrivals) {
   setHero(arrivals);
-  if (!arrivals.length) {
-    document.getElementById('arrivals-list').innerHTML = '<div class="empty-arrivals">No more arrivals today</div>';
-    return;
-  }
-  const rows = arrivals.slice(1).map(a => { // skip first (shown in hero)
+  const listEl = document.getElementById('arrivals-list');
+  if (!arrivals.length) { listEl.innerHTML = '<div class="empty-arrivals">No more arrivals today</div>'; return; }
+  const rows = arrivals.slice(1).map(a => {
     const t = parseDiff(a.arrival_time);
     const cls = arrivalTimeClass(t.diffMin);
     const label = t.diffMin <= 0 ? 'Now' : t.diffMin < 60 ? `${t.diffMin} min` : t.text;
-    return `<div class="arrival-row">
-      <span class="arr-route">${a.route_name}</span>
+    const stype = a.service_type || 'trunk';
+    return `<div class="arrival-row" onclick='openLine(${JSON.stringify(a.route_id)})'>
+      <span class="arr-route ${stype}">${a.route_name}</span>
       <span class="arr-headsign">${a.trip_headsign}</span>
       <span class="arr-time ${cls}">${label}</span>
     </div>`;
   });
-  document.getElementById('arrivals-list').innerHTML =
-    rows.length ? rows.join('') : '<div class="empty-arrivals" style="padding:12px 16px;font-size:12px;color:#ccc">No further arrivals today</div>';
+  listEl.innerHTML = rows.length ? rows.join('') : '<div class="empty-arrivals" style="padding:12px 16px;font-size:12px">No further arrivals today</div>';
 }
-
 function closeSheet() {
   document.getElementById('sheet').classList.remove('open');
-  document.getElementById('backdrop').classList.remove('visible');
   selectedStop = null;
+  if (!currentLine) document.getElementById('backdrop').classList.remove('visible');
 }
 
+// ── Line detail (route shape + ordered timeline + direction toggle) ──
+async function openLine(routeId) {
+  document.getElementById('line-sheet').classList.add('open');
+  document.getElementById('backdrop').classList.add('visible');
+  document.getElementById('line-stops').innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
+  document.getElementById('dir-toggle').innerHTML = '';
+  try {
+    const r = await fetch(`${PROXY}/route/${encodeURIComponent(routeId)}`);
+    if (!r.ok) throw new Error('not found');
+    currentLine = await r.json();
+    currentDir = 0;
+    const pill = document.getElementById('line-pill');
+    pill.className = currentLine.service_type;
+    pill.textContent = `🚌 ${currentLine.route_name}`;
+    renderDirToggle();
+    renderLineDir();
+  } catch {
+    document.getElementById('line-stops').innerHTML = '<div class="empty-arrivals">Could not load this line</div>';
+  }
+}
+function renderDirToggle() {
+  const wrap = document.getElementById('dir-toggle');
+  if (!currentLine || currentLine.directions.length < 2) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = currentLine.directions.map((d, i) =>
+    `<button class="dir-btn ${i===currentDir?'active':''}" onclick="switchDir(${i})">→ ${d.headsign || ('Direction ' + (i+1))}</button>`
+  ).join('');
+}
+function switchDir(i) { currentDir = i; renderDirToggle(); renderLineDir(); }
+function renderLineDir() {
+  const dir = currentLine.directions[currentDir];
+  const stype = currentLine.service_type;
+  document.getElementById('line-headsign').textContent = dir.headsign ? `→ ${dir.headsign}` : '';
+  // timeline
+  const stops = dir.stops || [];
+  document.getElementById('line-stops').innerHTML = stops.length
+    ? stops.map((s, i) => `
+      <div class="line-stop ${stype} ${i===0?'first':''} ${i===stops.length-1?'last':''}" onclick='openStopById(${JSON.stringify(s.stop_id)})'>
+        <div class="line-stop-rail">
+          <div class="line-stop-line top"></div>
+          <div class="line-stop-node"></div>
+          <div class="line-stop-line bottom"></div>
+        </div>
+        <div class="line-stop-name">${s.stop_name}<div class="line-stop-code">${s.stop_code || ''}</div></div>
+      </div>`).join('')
+    : '<div class="empty-arrivals">No stop list for this direction</div>';
+  // shape on map
+  drawShape(dir.shape || [], stype);
+  // mark the line's stops distinctly on the map
+  highlightLineStops(stops, stype);
+}
+function drawShape(shape, stype) {
+  shapeLayer.clearLayers();
+  if (!shape.length) return;
+  const colour = stype === 'feeder' ? '#1B9E8A' : '#3E9BD6';
+  // white casing under the coloured line for legibility on the cream map
+  L.polyline(shape, { color: 'white', weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(shapeLayer);
+  L.polyline(shape, { color: colour, weight: 4.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }).addTo(shapeLayer);
+  try { map.fitBounds(L.latLngBounds(shape).pad(0.15), { paddingBottomRight: [0, window.innerHeight * 0.5] }); } catch {}
+}
+function highlightLineStops(stops, stype) {
+  // overlay line stops as sky/teal nodes (kept in shapeLayer so they clear together)
+  stops.forEach(s => {
+    const icon = L.divIcon({
+      html: `<div class="stop-dot on-line" style="border-color:white;background:${stype==='feeder'?'#1B9E8A':'#3E9BD6'}"></div>`,
+      className: '', iconSize: [14, 14], iconAnchor: [7, 7],
+    });
+    L.marker([s.stop_lat, s.stop_lon], { icon, zIndexOffset: 150 })
+      .on('click', (e) => { L.DomEvent.stopPropagation(e); openStopById(s.stop_id); })
+      .bindTooltip(s.stop_name, { direction: 'top', offset: [0, -8] }).addTo(shapeLayer);
+  });
+}
+function closeLine() {
+  document.getElementById('line-sheet').classList.remove('open');
+  currentLine = null;
+  shapeLayer.clearLayers();
+  if (!selectedStop) document.getElementById('backdrop').classList.remove('visible');
+}
+
+function closeAll() { closeSheet(); closeLine(); closeNearby(); document.getElementById('backdrop').classList.remove('visible'); }
+
+// ── Favourites (Home / Work) ──
+function loadFavs() { try { return JSON.parse(localStorage.getItem('godeez_favs') || '{}'); } catch { return {}; } }
+function saveFavs() { localStorage.setItem('godeez_favs', JSON.stringify(favs)); }
+function renderFavChips() {
+  const row = document.getElementById('fav-row');
+  const make = (key, emoji, fallback) => {
+    const f = favs[key];
+    if (f) return `<button class="fav-chip" onclick='goToFav(${JSON.stringify(key)})'><span class="fav-emoji">${emoji}</span>${f.short || fallback}</button>`;
+    return `<button class="fav-chip unset" onclick="toast('Open a stop, then tap “Save as ${fallback}”')"><span class="fav-emoji">${emoji}</span>Set ${fallback}</button>`;
+  };
+  row.innerHTML = make('home', '🏠', 'Home') + make('work', '💼', 'Work');
+}
+function shortName(name) { return name.length > 16 ? name.slice(0, 15) + '…' : name; }
+function toggleFav(key) {
+  if (!selectedStop) return;
+  if (favs[key] && favs[key].stop_id === selectedStop.stop_id) {
+    delete favs[key]; toast(`${key === 'home' ? 'Home' : 'Work'} cleared`);
+  } else {
+    favs[key] = { stop_id: selectedStop.stop_id, stop_name: selectedStop.stop_name,
+      short: shortName(selectedStop.stop_name), lat: selectedStop.stop_lat, lng: selectedStop.stop_lon };
+    toast(`Saved as ${key === 'home' ? 'Home 🏠' : 'Work 💼'}`);
+  }
+  saveFavs(); renderFavChips(); syncFavButtons();
+}
+function syncFavButtons() {
+  const h = document.getElementById('set-home'), w = document.getElementById('set-work');
+  const isH = selectedStop && favs.home && favs.home.stop_id === selectedStop.stop_id;
+  const isW = selectedStop && favs.work && favs.work.stop_id === selectedStop.stop_id;
+  h.classList.toggle('active', !!isH); w.classList.toggle('active', !!isW);
+  h.querySelector('span').nextSibling.textContent = isH ? ' Home ✓' : ' Save as Home';
+  w.querySelector('span').nextSibling.textContent = isW ? ' Work ✓' : ' Save as Work';
+}
+async function goToFav(key) {
+  const f = favs[key]; if (!f) return;
+  map.setView([f.lat, f.lng], 16);
+  updateUserMarker();
+  openStopById(f.stop_id);
+}
+
+// ── Confirm ──
 function handleConfirm() {
   if (!selectedStop) return;
   confirmCount++;
   const btn = document.getElementById('confirm-btn');
   btn.className = 'sent';
-  document.getElementById('confirm-label').textContent = '✓ Confirmed — thank you!';
-  document.getElementById('confirm-sub').textContent =
-    `${confirmCount} confirmation${confirmCount > 1 ? 's' : ''} sent. You're helping other commuters.`;
-  setTimeout(() => {
-    btn.className = '';
-    document.getElementById('confirm-label').textContent = 'Bus is here — tap to confirm';
-  }, 3000);
-  console.log('Confirmation for', selectedStop.stop_id);
+  document.getElementById('confirm-label').textContent = '✓ Thanks! You told everyone';
+  document.getElementById('confirm-sub').textContent = `${confirmCount} confirmation${confirmCount>1?'s':''} sent. You're helping other commuters.`;
+  setTimeout(() => { btn.className = ''; document.getElementById('confirm-label').textContent = 'Bus is here? Tap to confirm'; }, 3000);
 }
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Toast ──
+let toastTimer = null;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// ── Search ──
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
-
 async function doSearch(query) {
   if (!query || query.length < 2) { searchResults.classList.remove('visible'); return; }
-  // Search from currently loaded stops first
   const lower = query.toLowerCase();
-  const matches = allStops
-    .filter(s => s.stop_name.toLowerCase().includes(lower) || (s.stop_code||'').toLowerCase().includes(lower))
-    .slice(0, 8);
-
+  const matches = allStops.filter(s => s.stop_name.toLowerCase().includes(lower) || (s.stop_code||'').toLowerCase().includes(lower)).slice(0, 8);
   if (!matches.length) { searchResults.classList.remove('visible'); return; }
-
   searchResults.innerHTML = matches.map(s => `
-    <div class="search-result" onclick="selectSearchResult('${s.stop_id}')">
+    <div class="search-result" onclick='selectSearchResult(${JSON.stringify(s.stop_id)})'>
       <span class="search-result-code">${s.stop_code || s.stop_id.slice(-4)}</span>
       <span class="search-result-name">${s.stop_name}</span>
-    </div>
-  `).join('');
+    </div>`).join('');
   searchResults.classList.add('visible');
 }
-
 function selectSearchResult(stopId) {
   const stop = allStops.find(s => s.stop_id === stopId);
   if (!stop) return;
@@ -604,20 +885,18 @@ function selectSearchResult(stopId) {
   map.setView([stop.stop_lat, stop.stop_lon], 16);
   setTimeout(() => openStop(stop), 400);
 }
-
 searchInput.addEventListener('input', (e) => doSearch(e.target.value));
 searchInput.addEventListener('focus', (e) => { if (e.target.value.length >= 2) doSearch(e.target.value); });
 document.addEventListener('click', (e) => {
-  if (!document.getElementById('search-bar').contains(e.target)) {
-    searchResults.classList.remove('visible');
-  }
+  if (!document.getElementById('search-bar').contains(e.target)) searchResults.classList.remove('visible');
 });
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
+// ── Boot ──
 initMap();
 connectStream();
-fetch(`${PROXY}/vehicles`)
-  .then(r => r.json())
+renderFavChips();
+refreshNearbyPeek();
+fetch(`${PROXY}/vehicles`).then(r => r.json())
   .then(d => { renderVehicles((d.features||[]).map(f=>f.properties)); updateFreshness(d.fetchedAt); });
 </script>
 </body>

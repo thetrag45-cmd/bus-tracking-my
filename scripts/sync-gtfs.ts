@@ -109,9 +109,18 @@ function setupSchema(db: Database) {
       start_date TEXT, end_date TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS shapes (
+      shape_id TEXT NOT NULL,
+      shape_pt_lat REAL NOT NULL,
+      shape_pt_lon REAL NOT NULL,
+      shape_pt_sequence INTEGER NOT NULL,
+      category TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_stop_times_stop_id ON stop_times(stop_id);
     CREATE INDEX IF NOT EXISTS idx_stop_times_trip_id ON stop_times(trip_id);
     CREATE INDEX IF NOT EXISTS idx_trips_route_id ON trips(route_id);
+    CREATE INDEX IF NOT EXISTS idx_shapes_shape_id ON shapes(shape_id);
   `);
 }
 
@@ -140,6 +149,8 @@ function clearCategory(db: Database, category: string) {
     }
     db.run(`DELETE FROM routes WHERE category = ?`, [category]);
   }
+  // Shapes are tagged with category directly, so clear them independently.
+  db.run(`DELETE FROM shapes WHERE category = ?`, [category]);
 }
 
 async function syncCategory(db: Database, category: string) {
@@ -203,6 +214,22 @@ async function syncCategory(db: Database, category: string) {
     );
     for (const row of stopTimeRows) {
       insertSt.run(row.trip_id, row.arrival_time, row.departure_time, row.stop_id, Number(row.stop_sequence));
+    }
+
+    // shapes — route geometry (polylines drawn on the map). Bulk insert.
+    const shapeRows = csvToObjects(text("shapes.txt"));
+    console.log(`  Inserting ${shapeRows.length} shape points for ${category}...`);
+    const insertShape = db.prepare(
+      `INSERT INTO shapes (shape_id, shape_pt_lat, shape_pt_lon, shape_pt_sequence, category) VALUES (?,?,?,?,?)`
+    );
+    for (const row of shapeRows) {
+      insertShape.run(
+        row.shape_id,
+        Number(row.shape_pt_lat),
+        Number(row.shape_pt_lon),
+        Number(row.shape_pt_sequence),
+        category
+      );
     }
   })();
 

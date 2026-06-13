@@ -1,4 +1,4 @@
-import type { VehiclePosition, Stop, Arrival } from "../types";
+import type { VehiclePosition, Stop, Arrival, LineDetail } from "../types";
 
 // In dev: use localhost proxy. In prod: set EXPO_PUBLIC_PROXY_URL env var.
 export const PROXY_URL =
@@ -22,6 +22,12 @@ export async function fetchArrivals(stopId: string): Promise<Arrival[]> {
   );
   const data = await res.json();
   return data.arrivals ?? [];
+}
+
+export async function fetchLineDetail(routeId: string): Promise<LineDetail | null> {
+  const res = await fetch(`${PROXY_URL}/route/${encodeURIComponent(routeId)}`);
+  if (!res.ok) return null;
+  return (await res.json()) as LineDetail;
 }
 
 export async function fetchVehicles(): Promise<VehiclePosition[]> {
