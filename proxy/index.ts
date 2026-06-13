@@ -87,6 +87,20 @@ function broadcastUpdate() {
   }
 }
 
+// SSE heartbeat: a comment line keeps the connection alive between the 30s
+// vehicle polls so idle-timeout proxies/clients don't drop the stream
+// (otherwise the client thrashes through ERR_INCOMPLETE_CHUNKED_ENCODING +
+// reconnect loops and the "Live" freshness badge never settles).
+setInterval(() => {
+  for (const ctrl of sseClients) {
+    try {
+      ctrl.enqueue(`: ping\n\n`);
+    } catch {
+      sseClients.delete(ctrl);
+    }
+  }
+}, 15_000);
+
 // ── SQLite arrivals (from GTFS static) ───────────────────────────────────────
 
 let db: Database | null = null;
