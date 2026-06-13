@@ -141,7 +141,7 @@ function getUpcomingArrivals(stopId: string, limit = 6): ArrivalRow[] {
         st.arrival_time,
         st.departure_time,
         r.route_id,
-        COALESCE(NULLIF(r.route_long_name,''), r.route_short_name, r.route_id) AS route_name,
+        COALESCE(NULLIF(r.route_short_name,''), NULLIF(r.route_long_name,''), r.route_id) AS route_name,
         t.trip_headsign,
         t.trip_id
       FROM stop_times st
