@@ -865,27 +865,48 @@ function toast(msg) {
 // ── Search ──
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
+let searchHits = [];        // full stop objects from the last query
+let searchSeq = 0;          // guards against out-of-order async responses
+let searchTimer = null;
 async function doSearch(query) {
-  if (!query || query.length < 2) { searchResults.classList.remove('visible'); return; }
-  const lower = query.toLowerCase();
-  const matches = allStops.filter(s => s.stop_name.toLowerCase().includes(lower) || (s.stop_code||'').toLowerCase().includes(lower)).slice(0, 8);
-  if (!matches.length) { searchResults.classList.remove('visible'); return; }
-  searchResults.innerHTML = matches.map(s => `
-    <div class="search-result" onclick='selectSearchResult(${JSON.stringify(s.stop_id)})'>
-      <span class="search-result-code">${s.stop_code || s.stop_id.slice(-4)}</span>
-      <span class="search-result-name">${s.stop_name}</span>
-    </div>`).join('');
-  searchResults.classList.add('visible');
+  query = (query || '').trim();
+  if (query.length < 2) { searchResults.classList.remove('visible'); return; }
+  const seq = ++searchSeq;
+  try {
+    // Search the WHOLE stops table on the backend, not just loaded-nearby stops.
+    const r = await fetch(`${PROXY}/stops/search?q=${encodeURIComponent(query)}&limit=10`);
+    const data = await r.json();
+    if (seq !== searchSeq) return; // a newer query already fired
+    searchHits = data.stops || [];
+    if (!searchHits.length) {
+      searchResults.innerHTML = '<div class="search-result" style="cursor:default"><span class="search-result-name" style="color:var(--faint)">No stops match “' + query + '”</span></div>';
+      searchResults.classList.add('visible');
+      return;
+    }
+    searchResults.innerHTML = searchHits.map(s => `
+      <div class="search-result" onclick='selectSearchResult(${JSON.stringify(s.stop_id)})'>
+        <span class="search-result-code">${s.stop_code || s.stop_id.slice(-4)}</span>
+        <span class="search-result-name">${s.stop_name}</span>
+      </div>`).join('');
+    searchResults.classList.add('visible');
+  } catch {
+    if (seq === searchSeq) searchResults.classList.remove('visible');
+  }
 }
 function selectSearchResult(stopId) {
-  const stop = allStops.find(s => s.stop_id === stopId);
+  const stop = searchHits.find(s => s.stop_id === stopId);
   if (!stop) return;
   searchInput.value = stop.stop_name;
   searchResults.classList.remove('visible');
   map.setView([stop.stop_lat, stop.stop_lon], 16);
+  loadNearbyStops(); // refresh map markers around the chosen stop
   setTimeout(() => openStop(stop), 400);
 }
-searchInput.addEventListener('input', (e) => doSearch(e.target.value));
+searchInput.addEventListener('input', (e) => {
+  const v = e.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => doSearch(v), 180); // debounce backend calls
+});
 searchInput.addEventListener('focus', (e) => { if (e.target.value.length >= 2) doSearch(e.target.value); });
 document.addEventListener('click', (e) => {
   if (!document.getElementById('search-bar').contains(e.target)) searchResults.classList.remove('visible');

@@ -419,6 +419,26 @@ const server = Bun.serve({
       return Response.json(detail, { headers: CORS });
     }
 
+    // GET /stops/search?q=sunway&limit=10 — name/code search across ALL stops
+    if (url.pathname === "/stops/search") {
+      const q = (url.searchParams.get("q") ?? "").trim();
+      const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "10"), 25);
+      if (q.length < 2 || !db) return Response.json({ stops: [] }, { headers: CORS });
+      const like = `%${q}%`;
+      const stops = db
+        .query<StopRow, [string, string, string, number]>(
+          `SELECT stop_id, stop_code, stop_name, stop_lat, stop_lon
+           FROM stops
+           WHERE stop_name LIKE ? COLLATE NOCASE OR stop_code LIKE ? COLLATE NOCASE
+           ORDER BY
+             CASE WHEN stop_name LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END,
+             length(stop_name)
+           LIMIT ?`
+        )
+        .all(like, like, `${q}%`, limit);
+      return Response.json({ stops }, { headers: CORS });
+    }
+
     // GET /stops/nearby?lat=...&lng=...&radius=0.5
     if (url.pathname === "/stops/nearby") {
       const lat = parseFloat(url.searchParams.get("lat") ?? "");
