@@ -346,6 +346,124 @@ function getLineDetail(routeId: string) {
   };
 }
 
+// ── Trip planner (direct bus): "which stop + which bus to get there" ───────────
+// MVP scope: single-leg, no transfers. Find a route whose trip visits a stop
+// near the origin (board) before a stop near the destination (alight), today,
+// departing after now. Returns walk → board → ride → alight → walk per route.
+
+function nowTimeStr(): string {
+  const n = new Date();
+  return `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}:${String(n.getSeconds()).padStart(2, "0")}`;
+}
+
+type PlanLeg = {
+  route_id: string;
+  route_name: string;
+  service_type: "feeder" | "trunk";
+  headsign: string;
+  depart: string; // HH:MM:SS at board stop
+  num_stops: number;
+  board: { stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; walk_m: number; walk_min: number };
+  alight: { stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; walk_m: number; walk_min: number };
+};
+
+function getPlan(fromLat: number, fromLng: number, toLat: number, toLng: number) {
+  if (!db) return { options: [] as PlanLeg[] };
+
+  // Candidate boarding stops near origin, alighting stops near destination.
+  const boardStops = getNearbyStops(fromLat, fromLng, 0.8, 14);
+  const alightStops = getNearbyStops(toLat, toLng, 0.8, 14);
+  if (!boardStops.length || !alightStops.length) return { options: [] };
+
+  const boardById = new Map(boardStops.map((s) => [s.stop_id, s]));
+  const alightById = new Map(alightStops.map((s) => [s.stop_id, s]));
+  const bPlace = boardStops.map(() => "?").join(",");
+  const aPlace = alightStops.map(() => "?").join(",");
+
+  const now = new Date();
+  const todayCol = DOW_COLUMNS[now.getDay()];
+  const todayDate = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const currentTime = nowTimeStr();
+
+  type Row = {
+    route_id: string;
+    route_name: string;
+    category: string;
+    headsign: string;
+    board_stop: string;
+    board_seq: number;
+    depart: string;
+    alight_stop: string;
+    alight_seq: number;
+  };
+
+  // Self-join stop_times on the same trip, board before alight, valid service today.
+  const rows = db
+    .query<Row, any[]>(
+      `SELECT t.route_id,
+        COALESCE(NULLIF(r.route_short_name,''), NULLIF(r.route_long_name,''), r.route_id) AS route_name,
+        r.category,
+        t.trip_headsign AS headsign,
+        b.stop_id AS board_stop, b.stop_sequence AS board_seq, b.departure_time AS depart,
+        a.stop_id AS alight_stop, a.stop_sequence AS alight_seq
+       FROM stop_times b
+       JOIN stop_times a ON a.trip_id = b.trip_id AND a.stop_sequence > b.stop_sequence
+       JOIN trips t ON t.trip_id = b.trip_id
+       JOIN routes r ON r.route_id = t.route_id
+       JOIN calendar c ON c.service_id = t.service_id
+       WHERE b.stop_id IN (${bPlace})
+         AND a.stop_id IN (${aPlace})
+         AND b.departure_time >= ?
+         AND b.departure_time < '24:00:00'
+         AND c.${todayCol} = 1 AND c.start_date <= ? AND c.end_date >= ?
+       ORDER BY b.departure_time
+       LIMIT 400`
+    )
+    .all(
+      ...boardStops.map((s) => s.stop_id),
+      ...alightStops.map((s) => s.stop_id),
+      currentTime,
+      todayDate,
+      todayDate
+    );
+
+  // Pick the best option per route: soonest departure, then fewest stops, then
+  // shortest combined walk.
+  const best = new Map<string, PlanLeg>();
+  for (const row of rows) {
+    const b = boardById.get(row.board_stop)!;
+    const a = alightById.get(row.alight_stop)!;
+    // The ride must make real progress toward the destination: the board stop
+    // should be meaningfully farther from the destination than the alight stop.
+    // Filters degenerate "ride away and walk back" options (and origin≈dest).
+    const boardToDest = haversineM(b.stop_lat, b.stop_lon, toLat, toLng);
+    if (boardToDest - a.walk_m < 400) continue; // need ≥400m net closer
+    const candidate: PlanLeg = {
+      route_id: row.route_id,
+      route_name: row.route_name,
+      service_type: serviceType(row.category),
+      headsign: row.headsign,
+      depart: row.depart,
+      num_stops: row.alight_seq - row.board_seq,
+      board: { stop_id: b.stop_id, stop_name: b.stop_name, stop_lat: b.stop_lat, stop_lon: b.stop_lon, walk_m: b.walk_m, walk_min: b.walk_min },
+      alight: { stop_id: a.stop_id, stop_name: a.stop_name, stop_lat: a.stop_lat, stop_lon: a.stop_lon, walk_m: a.walk_m, walk_min: a.walk_min },
+    };
+    const prev = best.get(row.route_id);
+    if (!prev || candidate.depart < prev.depart || (candidate.depart === prev.depart && candidate.num_stops < prev.num_stops)) {
+      best.set(row.route_id, candidate);
+    }
+  }
+
+  // Rank options: soonest departure first, then least total walk.
+  const options = [...best.values()]
+    .sort((x, y) =>
+      x.depart === y.depart ? x.board.walk_m + x.alight.walk_m - (y.board.walk_m + y.alight.walk_m) : x.depart < y.depart ? -1 : 1
+    )
+    .slice(0, 4);
+
+  return { options };
+}
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 openDb();
@@ -417,6 +535,18 @@ const server = Bun.serve({
       const detail = getLineDetail(routeId);
       if (!detail) return Response.json({ error: "route not found" }, { status: 404, headers: CORS });
       return Response.json(detail, { headers: CORS });
+    }
+
+    // GET /plan?fromLat=&fromLng=&toLat=&toLng= — direct-bus trip planner
+    if (url.pathname === "/plan") {
+      const fromLat = parseFloat(url.searchParams.get("fromLat") ?? "");
+      const fromLng = parseFloat(url.searchParams.get("fromLng") ?? "");
+      const toLat = parseFloat(url.searchParams.get("toLat") ?? "");
+      const toLng = parseFloat(url.searchParams.get("toLng") ?? "");
+      if ([fromLat, fromLng, toLat, toLng].some(isNaN)) {
+        return Response.json({ error: "fromLat,fromLng,toLat,toLng required" }, { status: 400, headers: CORS });
+      }
+      return Response.json(getPlan(fromLat, fromLng, toLat, toLng), { headers: CORS });
     }
 
     // GET /stops/search?q=sunway&limit=10 — name/code search across ALL stops

@@ -206,6 +206,36 @@
     #next-bus-headsign { font-size: 12px; color: var(--later); margin-top: 2px; }
     .next-bus-unit { font-size: 14px; font-weight: 700; }
 
+    /* Directions (trip planner) entry button */
+    #directions-btn {
+      margin: 12px 16px 0; padding: 13px; width: calc(100% - 32px);
+      background: var(--ink); color: #fff; border: none; border-radius: 14px;
+      font-family: inherit; font-size: 14px; font-weight: 800; cursor: pointer; flex-shrink: 0;
+    }
+    #directions-btn:active { transform: scale(0.98); }
+
+    /* Journey cards in the directions sheet */
+    .journey-card {
+      border: 1.5px solid var(--line); border-radius: 16px; background: #fff;
+      padding: 12px 14px; margin-bottom: 10px;
+    }
+    .journey-card.best { border-color: var(--yellow); box-shadow: 0 2px 10px rgba(255,201,60,0.25); }
+    .journey-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .journey-route {
+      font-size: 13px; font-weight: 800; color: #fff; padding: 3px 10px; border-radius: 20px;
+    }
+    .journey-route.trunk { background: var(--sky); }
+    .journey-route.feeder { background: var(--teal); }
+    .journey-head-headsign { flex: 1; font-size: 12px; color: var(--later); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .journey-depart { font-size: 12px; font-weight: 800; color: var(--go); }
+    .journey-best-tag { font-size: 10px; font-weight: 800; color: var(--amberInk); background: var(--chip); padding: 2px 7px; border-radius: 10px; }
+    .journey-step { display: flex; align-items: flex-start; gap: 10px; padding: 3px 0; }
+    .journey-step-icon { width: 20px; text-align: center; font-size: 13px; flex-shrink: 0; }
+    .journey-step-text { flex: 1; font-size: 13px; color: var(--ink); line-height: 1.35; }
+    .journey-step-text b { font-weight: 800; }
+    .journey-step-text .sub { color: var(--later); font-size: 11px; }
+    .journey-rail { color: var(--line); padding-left: 5px; font-size: 12px; line-height: 1; }
+
     /* Save-as-favourite controls inside stop sheet */
     #fav-actions { display: flex; gap: 8px; padding: 10px 16px 0; flex-shrink: 0; }
     .fav-set-btn {
@@ -385,6 +415,8 @@
     </div>
   </div>
 
+  <button id="directions-btn" onclick="openDirections()">🧭 Directions to here</button>
+
   <div id="fav-actions">
     <button class="fav-set-btn" id="set-home" onclick="toggleFav('home')"><span>🏠</span> Save as Home</button>
     <button class="fav-set-btn" id="set-work" onclick="toggleFav('work')"><span>💼</span> Save as Work</button>
@@ -431,6 +463,19 @@
   <div id="nearby-list" style="flex:1;overflow-y:auto;padding-bottom:20px"><div class="loading-row"><div class="spinner"></div></div></div>
 </div>
 
+<!-- Directions sheet (trip planner) -->
+<div id="dir-sheet" class="sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head">
+    <div style="flex:1">
+      <div class="sheet-title">Directions</div>
+      <div id="dir-route-label" style="font-size:12px;color:var(--later);font-weight:600;margin-top:2px"></div>
+    </div>
+    <button class="close-btn" onclick="closeDirections()">✕</button>
+  </div>
+  <div id="dir-list" style="flex:1;overflow-y:auto;padding:8px 16px 20px"><div class="loading-row"><div class="spinner"></div></div></div>
+</div>
+
 <!-- Out-of-region overlay -->
 <div id="region-overlay">
   <svg viewBox="0 0 52 52" aria-hidden="true">
@@ -462,6 +507,7 @@ const PROXY = 'http://localhost:3001';
 const COVERAGE = { lat: 3.139, lng: 101.687, radiusKm: 60 };
 let map, vehicleLayer, stopLayer, shapeLayer, userMarker;
 let selectedStop = null, currentLine = null, currentDir = 0;
+let planOptions = [], planDest = null;
 let confirmCount = 0, allStops = [], userLocation = null, eventSource = null;
 let favs = loadFavs();
 
@@ -841,7 +887,97 @@ function closeLine() {
   if (!selectedStop) document.getElementById('backdrop').classList.remove('visible');
 }
 
-function closeAll() { closeSheet(); closeLine(); closeNearby(); document.getElementById('backdrop').classList.remove('visible'); }
+function closeAll() { closeSheet(); closeLine(); closeNearby(); closeDirections(); document.getElementById('backdrop').classList.remove('visible'); }
+
+// ── Directions / trip planner: "which stop + which bus to get there" ──
+async function openDirections() {
+  if (!selectedStop) return;
+  planDest = { stop_id: selectedStop.stop_id, name: selectedStop.stop_name, lat: selectedStop.stop_lat, lng: selectedStop.stop_lon };
+  // Origin priority: live location → saved Home → current map centre.
+  const origin = userLocation
+    ? { lat: userLocation.lat, lng: userLocation.lng, label: 'your location' }
+    : favs.home
+    ? { lat: favs.home.lat, lng: favs.home.lng, label: 'Home' }
+    : (() => { const c = map.getCenter(); return { lat: c.lat, lng: c.lng, label: 'map centre' }; })();
+
+  document.getElementById('sheet').classList.remove('open');
+  selectedStop = null;
+  document.getElementById('dir-sheet').classList.add('open');
+  document.getElementById('backdrop').classList.add('visible');
+  document.getElementById('dir-route-label').textContent = `From ${origin.label} → ${planDest.name}`;
+  const list = document.getElementById('dir-list');
+  list.innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
+  try {
+    const r = await fetch(`${PROXY}/plan?fromLat=${origin.lat}&fromLng=${origin.lng}&toLat=${planDest.lat}&toLng=${planDest.lng}`);
+    renderPlan((await r.json()).options || []);
+  } catch {
+    list.innerHTML = '<div class="empty-arrivals">Could not plan this trip</div>';
+  }
+}
+function fmtClock(t) { const [h, m] = t.split(':'); return `${h}:${m}`; }
+function planMins(t) { const [h, m] = t.split(':').map(Number); const now = new Date(); return (h * 60 + m) - (now.getHours() * 60 + now.getMinutes()); }
+function renderPlan(options) {
+  const list = document.getElementById('dir-list');
+  planOptions = options;
+  if (!options.length) {
+    shapeLayer.clearLayers();
+    list.innerHTML = `<div class="empty-arrivals">No direct bus to here right now.<br><span style="font-size:12px;color:var(--faint)">Trips with a transfer are coming soon.</span></div>`;
+    return;
+  }
+  list.innerHTML = options.map((o, i) => {
+    const dm = planMins(o.depart);
+    const departLabel = dm <= 0 ? 'now' : dm < 60 ? `in ${dm} min` : `at ${fmtClock(o.depart)}`;
+    return `<div class="journey-card ${i === 0 ? 'best' : ''}" onclick="drawPlan(${i})">
+      <div class="journey-head">
+        <span class="journey-route ${o.service_type}">${o.route_name}</span>
+        <span class="journey-head-headsign">${o.headsign || ''}</span>
+        ${i === 0 ? '<span class="journey-best-tag">BEST</span>' : ''}
+        <span class="journey-depart">${departLabel}</span>
+      </div>
+      <div class="journey-step"><span class="journey-step-icon">🚶</span><span class="journey-step-text">Walk <b>${o.board.walk_min} min</b> to <b>${o.board.stop_name}</b></span></div>
+      <div class="journey-rail">│</div>
+      <div class="journey-step"><span class="journey-step-icon">🚌</span><span class="journey-step-text">Board <b>${o.route_name}</b> · ride <b>${o.num_stops} stop${o.num_stops > 1 ? 's' : ''}</b> <span class="sub">(departs ${fmtClock(o.depart)})</span></span></div>
+      <div class="journey-rail">│</div>
+      <div class="journey-step"><span class="journey-step-icon">🚏</span><span class="journey-step-text">Get off at <b>${o.alight.stop_name}</b></span></div>
+      <div class="journey-rail">│</div>
+      <div class="journey-step"><span class="journey-step-icon">📍</span><span class="journey-step-text">Walk <b>${o.alight.walk_min} min</b> to your destination</span></div>
+    </div>`;
+  }).join('');
+  drawPlan(0);
+}
+async function drawPlan(i) {
+  const o = planOptions[i];
+  if (!o) return;
+  [...document.querySelectorAll('.journey-card')].forEach((c, idx) => c.classList.toggle('best', idx === i));
+  shapeLayer.clearLayers();
+  try {
+    const detail = await (await fetch(`${PROXY}/route/${encodeURIComponent(o.route_id)}`)).json();
+    const dir = (detail.directions || []).find(d => d.stops.some(s => s.stop_id === o.board.stop_id)) || detail.directions[0];
+    if (dir && dir.shape && dir.shape.length) {
+      const colour = o.service_type === 'feeder' ? '#1B9E8A' : '#3E9BD6';
+      L.polyline(dir.shape, { color: 'white', weight: 8, opacity: 0.9, lineCap: 'round' }).addTo(shapeLayer);
+      L.polyline(dir.shape, { color: colour, weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(shapeLayer);
+    }
+  } catch {}
+  addPlanMarker(o.board.stop_lat, o.board.stop_lon, '#1F6B3A', 'BOARD');
+  addPlanMarker(o.alight.stop_lat, o.alight.stop_lon, '#C77B1E', 'GET OFF');
+  try {
+    map.fitBounds(L.latLngBounds([[o.board.stop_lat, o.board.stop_lon], [o.alight.stop_lat, o.alight.stop_lon]]).pad(0.4),
+      { paddingBottomRight: [0, window.innerHeight * 0.55] });
+  } catch {}
+}
+function addPlanMarker(lat, lng, color, label) {
+  const icon = L.divIcon({
+    html: `<div style="background:${color};color:#fff;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.4);border:1.5px solid #fff;font-family:'Nunito',sans-serif">${label}</div>`,
+    className: '', iconAnchor: [0, 0],
+  });
+  L.marker([lat, lng], { icon, zIndexOffset: 400 }).addTo(shapeLayer);
+}
+function closeDirections() {
+  document.getElementById('dir-sheet').classList.remove('open');
+  shapeLayer.clearLayers();
+  if (!selectedStop && !currentLine) document.getElementById('backdrop').classList.remove('visible');
+}
 
 // ── Favourites (Home / Work) ──
 function loadFavs() { try { return JSON.parse(localStorage.getItem('godeez_favs') || '{}'); } catch { return {}; } }
