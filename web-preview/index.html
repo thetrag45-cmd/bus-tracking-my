@@ -117,15 +117,25 @@
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* ── Bus stop markers ── */
+    /* 32px transparent hit box around a 17px dot → bigger tap target so
+       closely-spaced stops are still reachable (residential clusters). */
+    .stop-hit { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
     .stop-dot {
-      width: 18px; height: 18px; background: var(--ink);
-      border: 2.5px solid white; border-radius: 50%;
-      box-shadow: 0 1px 5px rgba(58,47,40,0.4);
-      cursor: pointer; transition: transform 0.15s;
+      width: 17px; height: 17px; background: var(--ink);
+      border: 2.5px solid white; border-radius: 50%; position: relative;
+      box-shadow: 0 0 0 1.5px rgba(58,47,40,0.4), 0 2px 6px rgba(0,0,0,0.4);
+      transition: transform 0.15s;
     }
-    .stop-dot:hover, .stop-dot:active { transform: scale(1.35); background: #000; }
+    /* white centre pip → reads as a transit "stop node", pops on dark map text/roads */
+    .stop-dot::after {
+      content: ''; position: absolute; top: 50%; left: 50%;
+      width: 5px; height: 5px; border-radius: 50%; background: #fff;
+      transform: translate(-50%, -50%);
+    }
+    .stop-hit:hover .stop-dot, .stop-hit:active .stop-dot { transform: scale(1.3); background: #000; }
     .stop-dot.has-imminent { background: var(--soon); animation: stop-pulse 1.5s ease-in-out infinite; }
     .stop-dot.on-line { background: var(--sky); width: 14px; height: 14px; }
+    .stop-dot.on-line::after { display: none; }
     @keyframes stop-pulse {
       0%, 100% { box-shadow: 0 1px 5px rgba(199,123,30,0.45); }
       50% { box-shadow: 0 0 0 6px rgba(199,123,30,0.18); }
@@ -466,7 +476,14 @@ function initMap() {
   vehicleLayer = L.layerGroup().addTo(map);
   stopLayer = L.layerGroup().addTo(map);
   map.on('moveend', loadNearbyStops);
-  map.on('click', () => { if (selectedStop) closeSheet(); });
+  // Overlapping stop markers hide the ones beneath, so a click that lands on the
+  // map (not the top marker) resolves to the NEAREST stop within ~22px — covered
+  // stops stay reachable. A tap in genuine empty space just closes the sheet.
+  map.on('click', (e) => {
+    const near = nearestStopToPoint(e.latlng);
+    if (near) openStop(near);
+    else if (selectedStop) closeSheet();
+  });
   loadNearbyStops(); // show stops immediately, before/without a geolocation fix
   locateUser();
 }
@@ -571,11 +588,24 @@ function renderStops(stops) {
   stopLayer.clearLayers();
   allStops = stops;
   stops.forEach(stop => {
-    const icon = L.divIcon({ html: `<div class="stop-dot"></div>`, className: '', iconSize: [18, 18], iconAnchor: [9, 9] });
-    L.marker([stop.stop_lat, stop.stop_lon], { icon })
+    const icon = L.divIcon({ html: `<div class="stop-hit"><div class="stop-dot"></div></div>`, className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
+    L.marker([stop.stop_lat, stop.stop_lon], { icon, riseOnHover: true })
       .on('click', (e) => { L.DomEvent.stopPropagation(e); openStop(stop); })
-      .bindTooltip(stop.stop_name, { direction: 'top', offset: [0, -10] }).addTo(stopLayer);
+      .bindTooltip(stop.stop_name, { direction: 'top', offset: [0, -14] }).addTo(stopLayer);
   });
+}
+
+// Nearest loaded stop to a map point, within a pixel threshold (for click resolution).
+function nearestStopToPoint(latlng) {
+  if (!allStops.length) return null;
+  const p = map.latLngToContainerPoint(latlng);
+  let best = null, bestD = Infinity;
+  for (const s of allStops) {
+    const sp = map.latLngToContainerPoint([s.stop_lat, s.stop_lon]);
+    const d = Math.hypot(sp.x - p.x, sp.y - p.y);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  return bestD <= 22 ? best : null;
 }
 
 // ── Geometry helpers ──
