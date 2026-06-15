@@ -575,14 +575,34 @@ setInterval(() => { fetch(`${PROXY}/health`).then(r=>r.json()).then(d=>updateFre
 // ── Nearby stops (map markers) ──
 async function loadNearbyStops() {
   const zoom = map.getZoom();
-  if (zoom < 13) { stopLayer.clearLayers(); allStops = []; return; }
+  if (zoom < 13) { stopLayer.clearLayers(); allStops = []; setPeek([], null); return; }
   const center = map.getCenter();
   const radius = zoom >= 15 ? 0.8 : zoom >= 14 ? 1.2 : 2;
   try {
     const r = await fetch(`${PROXY}/stops/nearby?lat=${center.lat}&lng=${center.lng}&radius=${radius}`);
     const data = await r.json();
-    renderStops(data.stops || []);
+    const stops = data.stops || [];
+    renderStops(stops);
+    setPeek(stops, center); // keep the bottom peek in sync as the map pans
   } catch {}
+}
+
+// Update the bottom peek bar to the nearest stop in view. "X min walk" only
+// when the map is still near the user's location; otherwise "nearest in view".
+function setPeek(stops, center) {
+  const title = document.getElementById('np-title');
+  const sub = document.getElementById('np-sub');
+  if (!stops || !stops.length) {
+    title.textContent = "Zoom in to see stops";
+    sub.textContent = "Move the map to your area";
+    return;
+  }
+  const s = stops[0];
+  title.textContent = s.stop_name;
+  const atUser = userLocation && center && haversineM(userLocation.lat, userLocation.lng, center.lat, center.lng) < 300;
+  sub.textContent = atUser
+    ? `${s.walk_min} min walk · ${stops.length} stops nearby`
+    : `Nearest of ${stops.length} stops in view`;
 }
 function renderStops(stops) {
   stopLayer.clearLayers();
@@ -617,20 +637,9 @@ function haversineM(lat1, lng1, lat2, lng2) {
 function formatDist(m) { return m < 1000 ? `${Math.round(m)}m away` : `${(m/1000).toFixed(1)}km away`; }
 
 // ── Nearby peek + sheet (walk-time list) ──
-async function refreshNearbyPeek() {
-  const c = userLocation || map.getCenter();
-  const lat = c.lat, lng = c.lng;
-  try {
-    const r = await fetch(`${PROXY}/stops/nearby?lat=${lat}&lng=${lng}&radius=1.0`);
-    const d = await r.json();
-    const stops = d.stops || [];
-    if (stops.length) {
-      const s = stops[0];
-      document.getElementById('np-title').textContent = `${s.stop_name}`;
-      document.getElementById('np-sub').textContent = `${s.walk_min} min walk · ${stops.length} stops nearby`;
-    }
-  } catch {}
-}
+// The peek is kept current by loadNearbyStops (fires on every map move);
+// this stays as a thin entry point for boot / locate / area-jump.
+async function refreshNearbyPeek() { return loadNearbyStops(); }
 async function openNearby() {
   document.getElementById('nearby-sheet').classList.add('open');
   document.getElementById('backdrop').classList.add('visible');

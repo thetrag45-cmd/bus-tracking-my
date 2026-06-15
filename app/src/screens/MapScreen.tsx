@@ -202,7 +202,13 @@ export default function MapScreen() {
                 onPress={() => setSelectedStop(stop)}
                 anchor={{ x: 0.5, y: 0.5 }}
               >
-                <View style={styles.stopDot} />
+                {/* 30px transparent hit box around a 17px bullseye node →
+                    larger tap target + clearer "stop" read than a flat dot */}
+                <View style={styles.stopHit}>
+                  <View style={styles.stopDot}>
+                    <View style={styles.stopPip} />
+                  </View>
+                </View>
               </Marker>
             ))}
 
@@ -338,7 +344,13 @@ const styles = StyleSheet.create({
     shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 12, elevation: 5,
   },
 
-  stopDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: colors.ink, borderWidth: 2.5, borderColor: "#fff" },
+  stopHit: { width: 30, height: 30, alignItems: "center", justifyContent: "center" },
+  stopDot: {
+    width: 17, height: 17, borderRadius: 8.5, backgroundColor: colors.ink,
+    borderWidth: 2.5, borderColor: "#fff", alignItems: "center", justifyContent: "center",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 4, elevation: 4,
+  },
+  stopPip: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: "#fff" },
   lineStopDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: "#fff", borderWidth: 3 },
   busChip: { backgroundColor: colors.sky, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2 },
   busChipText: { color: "#fff", fontSize: 9, fontWeight: "800" },
