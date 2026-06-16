@@ -10,3 +10,4 @@ scripts/data/prasarana-*/
 .env.local
 android/
 ios/
+.gstack/
