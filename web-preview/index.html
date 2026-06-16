@@ -1053,7 +1053,25 @@ async function startTrip(i) {
     drawPlanShape(dir, o);
   } catch {}
 
-  nav = { active: true, phase: 'walk_board', option: o, routeStops, boardIdx, alightIdx, myBusId: null };
+  nav = { active: true, phase: 'walk_board', option: o, routeStops, boardIdx, alightIdx, myBusId: null,
+          gpsWatchId: null, gpsLat: null, gpsLng: null };
+
+  // Start continuous GPS tracking for walk-phase auto-advance.
+  if (navigator.geolocation) {
+    nav.gpsWatchId = navigator.geolocation.watchPosition(
+      pos => {
+        userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        nav.gpsLat = pos.coords.latitude;
+        nav.gpsLng = pos.coords.longitude;
+        updateUserMarker();
+        navGpsTick();  // proximity check → auto-advance walk phases
+        navTick();     // refresh distance text in banner
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 5000 }
+    );
+  }
+
   renderNav();
   navTick();
 }
@@ -1088,6 +1106,28 @@ function nearestStopIdx(lat, lng) {
   return { idx: best, distM: bestD };
 }
 
+// Proximity check on each GPS fix — auto-advances walk phases when the user arrives.
+function navGpsTick() {
+  if (!nav.active || nav.gpsLat == null) return;
+  const o = nav.option;
+  if (nav.phase === 'walk_board') {
+    const d = haversineM(nav.gpsLat, nav.gpsLng, o.board.stop_lat, o.board.stop_lon);
+    if (d < 50) {
+      navigator.vibrate?.([100, 50, 100]);
+      toast(`You're at ${o.board.stop_name} — get ready to board!`);
+      setPhase('wait');
+    }
+  } else if (nav.phase === 'walk_dest') {
+    const dest = planDest || { lat: o.alight.stop_lat, lng: o.alight.stop_lon };
+    const d = haversineM(nav.gpsLat, nav.gpsLng, dest.lat, dest.lng);
+    if (d < 50) {
+      navigator.vibrate?.([200]);
+      toast("You've arrived!");
+      setPhase('done');
+    }
+  }
+}
+
 // Live recompute on every vehicle update + phase change.
 function navTick() {
   if (!nav.active) return;
@@ -1101,7 +1141,12 @@ function navTick() {
   if (nav.phase === 'walk_board') {
     icon.textContent = '🚶';
     banner.textContent = `Walk to ${o.board.stop_name}`;
-    sub.textContent = `${o.board.walk_min} min walk · then catch ${o.route_name}`;
+    if (nav.gpsLat != null) {
+      const d = haversineM(nav.gpsLat, nav.gpsLng, o.board.stop_lat, o.board.stop_lon);
+      sub.textContent = `${d < 1000 ? Math.round(d) + 'm' : (d / 1000).toFixed(1) + 'km'} away · catch ${o.route_name} there`;
+    } else {
+      sub.textContent = `${o.board.walk_min} min walk · then catch ${o.route_name}`;
+    }
   } else if (nav.phase === 'wait') {
     icon.textContent = '🚌';
     // Find the soonest approaching bus on this route.
@@ -1151,8 +1196,14 @@ function navTick() {
     }
   } else if (nav.phase === 'walk_dest') {
     icon.textContent = '📍';
-    banner.textContent = `Get off & walk to destination`;
-    sub.textContent = `${o.alight.walk_min} min walk from ${o.alight.stop_name}`;
+    banner.textContent = `Walk to destination`;
+    if (nav.gpsLat != null) {
+      const dest = planDest || { lat: o.alight.stop_lat, lng: o.alight.stop_lon };
+      const d = haversineM(nav.gpsLat, nav.gpsLng, dest.lat, dest.lng);
+      sub.textContent = `${d < 1000 ? Math.round(d) + 'm' : (d / 1000).toFixed(1) + 'km'} to go · from ${o.alight.stop_name}`;
+    } else {
+      sub.textContent = `${o.alight.walk_min} min walk from ${o.alight.stop_name}`;
+    }
   } else if (nav.phase === 'done') {
     icon.textContent = '🎉';
     banner.textContent = `You've arrived!`;
@@ -1202,6 +1253,7 @@ function boardBus() {
 }
 
 function stopTrip() {
+  if (nav.gpsWatchId != null) navigator.geolocation.clearWatch(nav.gpsWatchId);
   nav = { active: false };
   document.getElementById('nav-sheet').classList.remove('open');
   shapeLayer.clearLayers();
