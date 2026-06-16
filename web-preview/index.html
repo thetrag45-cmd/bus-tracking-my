@@ -235,6 +235,37 @@
     .journey-step-text b { font-weight: 800; }
     .journey-step-text .sub { color: var(--later); font-size: 11px; }
     .journey-rail { color: var(--line); padding-left: 5px; font-size: 12px; line-height: 1; }
+    .journey-start {
+      margin-top: 10px; width: 100%; padding: 11px; border: none; border-radius: 12px;
+      background: var(--go); color: #fff; font-family: inherit; font-size: 14px; font-weight: 800; cursor: pointer;
+    }
+    .journey-start:active { transform: scale(0.98); background: #185c31; }
+
+    /* ── Live trip navigation ── */
+    #nav-banner { display: flex; align-items: center; gap: 12px; padding: 6px 16px 12px; border-bottom: 1px solid var(--line); }
+    #nav-banner-icon {
+      width: 44px; height: 44px; border-radius: 14px; background: var(--ink); color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0;
+    }
+    #nav-sheet.go #nav-banner-icon { background: var(--go); animation: nav-pulse 1.2s ease-in-out infinite; }
+    @keyframes nav-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(31,107,58,0.5); } 50% { box-shadow: 0 0 0 8px rgba(31,107,58,0); } }
+    #nav-banner-main { font-size: 17px; font-weight: 800; color: var(--ink); line-height: 1.2; }
+    #nav-banner-sub { font-size: 12px; color: var(--later); margin-top: 2px; }
+    #nav-steps { padding: 10px 16px 0; max-height: 30vh; overflow-y: auto; }
+    .nav-step { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; opacity: 0.45; }
+    .nav-step.current { opacity: 1; }
+    .nav-step.done { opacity: 0.4; }
+    .nav-step.done .nav-step-text { text-decoration: line-through; }
+    .nav-step-icon { width: 22px; text-align: center; font-size: 14px; flex-shrink: 0; }
+    .nav-step-text { flex: 1; font-size: 13px; color: var(--ink); line-height: 1.35; }
+    .nav-step.current .nav-step-text b { color: var(--go); }
+    #nav-actions { padding: 12px 16px 22px; display: flex; gap: 8px; }
+    .nav-btn {
+      flex: 1; padding: 14px; border: none; border-radius: 14px; font-family: inherit;
+      font-size: 15px; font-weight: 800; cursor: pointer; background: var(--yellow); color: var(--amberInk);
+    }
+    .nav-btn:active { transform: scale(0.98); }
+    .nav-btn.ghost { background: #fff; border: 1.5px solid var(--line); color: var(--later); }
 
     /* Save-as-favourite controls inside stop sheet */
     #fav-actions { display: flex; gap: 8px; padding: 10px 16px 0; flex-shrink: 0; }
@@ -476,6 +507,21 @@
   <div id="dir-list" style="flex:1;overflow-y:auto;padding:8px 16px 20px"><div class="loading-row"><div class="spinner"></div></div></div>
 </div>
 
+<!-- Live trip navigation sheet -->
+<div id="nav-sheet" class="sheet">
+  <div class="sheet-handle"></div>
+  <div id="nav-banner">
+    <div id="nav-banner-icon">🚶</div>
+    <div style="flex:1">
+      <div id="nav-banner-main">Starting trip…</div>
+      <div id="nav-banner-sub"></div>
+    </div>
+    <button class="close-btn" onclick="stopTrip()">✕</button>
+  </div>
+  <div id="nav-steps"></div>
+  <div id="nav-actions"></div>
+</div>
+
 <!-- Out-of-region overlay -->
 <div id="region-overlay">
   <svg viewBox="0 0 52 52" aria-hidden="true">
@@ -508,6 +554,8 @@ const COVERAGE = { lat: 3.139, lng: 101.687, radiusKm: 60 };
 let map, vehicleLayer, stopLayer, shapeLayer, userMarker;
 let selectedStop = null, currentLine = null, currentDir = 0;
 let planOptions = [], planDest = null;
+let lastVehicles = [];
+let nav = { active: false }; // live-trip navigation state
 let confirmCount = 0, allStops = [], userLocation = null, eventSource = null;
 let favs = loadFavs();
 
@@ -580,6 +628,8 @@ function jumpToArea(lat, lng) {
 
 // ── Vehicles ──
 function renderVehicles(vehicles) {
+  lastVehicles = vehicles;            // stash for live navigation
+  if (nav.active) navTick();          // refresh live trip guidance on each update
   vehicleLayer.clearLayers();
   vehicles.forEach(v => {
     const routeCode = v.label || v.routeId || '?';
@@ -887,7 +937,7 @@ function closeLine() {
   if (!selectedStop) document.getElementById('backdrop').classList.remove('visible');
 }
 
-function closeAll() { closeSheet(); closeLine(); closeNearby(); closeDirections(); document.getElementById('backdrop').classList.remove('visible'); }
+function closeAll() { closeSheet(); closeLine(); closeNearby(); closeDirections(); if (nav.active) stopTrip(); document.getElementById('backdrop').classList.remove('visible'); }
 
 // ── Directions / trip planner: "which stop + which bus to get there" ──
 async function openDirections() {
@@ -941,6 +991,7 @@ function renderPlan(options) {
       <div class="journey-step"><span class="journey-step-icon">🚏</span><span class="journey-step-text">Get off at <b>${o.alight.stop_name}</b></span></div>
       <div class="journey-rail">│</div>
       <div class="journey-step"><span class="journey-step-icon">📍</span><span class="journey-step-text">Walk <b>${o.alight.walk_min} min</b> to your destination</span></div>
+      <button class="journey-start" onclick="event.stopPropagation(); startTrip(${i})">▶ Start</button>
     </div>`;
   }).join('');
   drawPlan(0);
@@ -975,8 +1026,186 @@ function addPlanMarker(lat, lng, color, label) {
 }
 function closeDirections() {
   document.getElementById('dir-sheet').classList.remove('open');
+  if (!nav.active) shapeLayer.clearLayers();
+  if (!selectedStop && !currentLine && !nav.active) document.getElementById('backdrop').classList.remove('visible');
+}
+
+// ── Live trip navigation (Google-Maps-style: when to board, stop countdown, when to get off) ──
+async function startTrip(i) {
+  const o = planOptions[i];
+  if (!o) return;
+  document.getElementById('dir-sheet').classList.remove('open');
+  document.getElementById('nav-sheet').classList.add('open');
+  document.getElementById('backdrop').classList.add('visible');
+  document.getElementById('nav-steps').innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
+  document.getElementById('nav-actions').innerHTML = '';
+
+  // Load the route's ordered stops so we can count stops from the live bus.
+  let routeStops = [], boardIdx = 0, alightIdx = 0;
+  try {
+    const detail = await (await fetch(`${PROXY}/route/${encodeURIComponent(o.route_id)}`)).json();
+    let dir = (detail.directions || []).find(d => d.stops.some(s => s.stop_id === o.board.stop_id)) || detail.directions[0];
+    routeStops = (dir?.stops || []).map(s => ({ stop_id: s.stop_id, name: s.stop_name, lat: s.stop_lat, lon: s.stop_lon }));
+    boardIdx = routeStops.findIndex(s => s.stop_id === o.board.stop_id);
+    alightIdx = routeStops.findIndex(s => s.stop_id === o.alight.stop_id);
+    if (boardIdx < 0) boardIdx = 0;
+    if (alightIdx < 0 || alightIdx <= boardIdx) alightIdx = Math.min(boardIdx + o.num_stops, routeStops.length - 1);
+    drawPlanShape(dir, o);
+  } catch {}
+
+  nav = { active: true, phase: 'walk_board', option: o, routeStops, boardIdx, alightIdx, myBusId: null };
+  renderNav();
+  navTick();
+}
+
+function drawPlanShape(dir, o) {
   shapeLayer.clearLayers();
-  if (!selectedStop && !currentLine) document.getElementById('backdrop').classList.remove('visible');
+  if (dir && dir.shape && dir.shape.length) {
+    const colour = o.service_type === 'feeder' ? '#1B9E8A' : '#3E9BD6';
+    L.polyline(dir.shape, { color: 'white', weight: 8, opacity: 0.9, lineCap: 'round' }).addTo(shapeLayer);
+    L.polyline(dir.shape, { color: colour, weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(shapeLayer);
+  }
+  addPlanMarker(o.board.stop_lat, o.board.stop_lon, '#1F6B3A', 'BOARD');
+  addPlanMarker(o.alight.stop_lat, o.alight.stop_lon, '#C77B1E', 'GET OFF');
+}
+
+// The live feed reports routeId as the route NAME ("T852", "T155 Outbound"),
+// not the GTFS static route_id — so match live buses by name, direction-suffix
+// stripped.
+function routeKey(v) {
+  return (v.routeId || v.label || '').toUpperCase().replace(/\s*(OUTBOUND|INBOUND)\s*$/, '').trim();
+}
+function busesOnRoute() {
+  const target = (nav.option.route_name || '').toUpperCase().trim();
+  return lastVehicles.filter(v => routeKey(v) === target);
+}
+function nearestStopIdx(lat, lng) {
+  let best = -1, bestD = Infinity;
+  nav.routeStops.forEach((s, i) => {
+    const d = haversineM(lat, lng, s.lat, s.lon);
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return { idx: best, distM: bestD };
+}
+
+// Live recompute on every vehicle update + phase change.
+function navTick() {
+  if (!nav.active) return;
+  const o = nav.option;
+  const banner = document.getElementById('nav-banner-main');
+  const sub = document.getElementById('nav-banner-sub');
+  const icon = document.getElementById('nav-banner-icon');
+  const sheet = document.getElementById('nav-sheet');
+  sheet.classList.remove('go');
+
+  if (nav.phase === 'walk_board') {
+    icon.textContent = '🚶';
+    banner.textContent = `Walk to ${o.board.stop_name}`;
+    sub.textContent = `${o.board.walk_min} min walk · then catch ${o.route_name}`;
+  } else if (nav.phase === 'wait') {
+    icon.textContent = '🚌';
+    // Find the soonest approaching bus on this route.
+    const buses = busesOnRoute().map(v => ({ v, ...nearestStopIdx(v.lat, v.lng) }))
+      .filter(b => b.idx <= nav.boardIdx)
+      .sort((a, b) => (nav.boardIdx - a.idx) - (nav.boardIdx - b.idx));
+    if (buses.length) {
+      const b = buses[0];
+      const stopsAway = Math.max(0, nav.boardIdx - b.idx);
+      if (stopsAway === 0) {
+        sheet.classList.add('go');
+        banner.textContent = `Board ${o.route_name} now`;
+        sub.textContent = `${o.route_name} is at your stop — hop on!`;
+      } else {
+        const eta = Math.max(1, Math.round(stopsAway * 1.5));
+        banner.textContent = `${o.route_name} is ${stopsAway} stop${stopsAway > 1 ? 's' : ''} away`;
+        sub.textContent = `~${eta} min · board at ${o.board.stop_name}`;
+      }
+      // keep the approaching bus in view
+      try { map.panTo([b.v.lat, b.v.lng], { animate: true }); } catch {}
+    } else {
+      const dm = planMins(o.depart);
+      banner.textContent = `Wait for ${o.route_name}`;
+      sub.textContent = dm > 0 ? `Scheduled ${fmtClock(o.depart)} (in ${dm} min) · no live bus yet` : `Scheduled ${fmtClock(o.depart)} · no live bus yet`;
+    }
+  } else if (nav.phase === 'ride') {
+    icon.textContent = '🚌';
+    const alight = nav.routeStops[nav.alightIdx];
+    let myBus = nav.myBusId ? lastVehicles.find(v => v.vehicleId === nav.myBusId) : null;
+    if (myBus) {
+      const { idx } = nearestStopIdx(myBus.lat, myBus.lng);
+      const stopsToGo = nav.alightIdx - idx;
+      try { map.panTo([myBus.lat, myBus.lng], { animate: true }); } catch {}
+      if (stopsToGo <= 0) { setPhase('walk_dest'); return; }
+      const next = nav.routeStops[Math.min(idx + 1, nav.routeStops.length - 1)];
+      if (stopsToGo === 1) {
+        sheet.classList.add('go');
+        banner.textContent = `Get off NEXT stop`;
+        sub.textContent = `${alight.name} is next — get ready`;
+      } else {
+        banner.textContent = `${stopsToGo} stops to ${alight.name}`;
+        sub.textContent = `Next: ${next.name}`;
+      }
+    } else {
+      banner.textContent = `Ride to ${alight.name}`;
+      sub.textContent = `${o.num_stops} stops · tap “I got off” when you arrive`;
+    }
+  } else if (nav.phase === 'walk_dest') {
+    icon.textContent = '📍';
+    banner.textContent = `Get off & walk to destination`;
+    sub.textContent = `${o.alight.walk_min} min walk from ${o.alight.stop_name}`;
+  } else if (nav.phase === 'done') {
+    icon.textContent = '🎉';
+    banner.textContent = `You've arrived!`;
+    sub.textContent = `Welcome to ${planDest ? planDest.name : 'your destination'}`;
+  }
+}
+
+function setPhase(p) { nav.phase = p; renderNav(); navTick(); }
+
+function renderNav() {
+  const o = nav.option;
+  const order = ['walk_board', 'wait', 'ride', 'walk_dest'];
+  const curIdx = order.indexOf(nav.phase);
+  const steps = [
+    { ph: 'walk_board', icon: '🚶', text: `Walk to <b>${o.board.stop_name}</b> (${o.board.walk_min} min)` },
+    { ph: 'wait', icon: '🚌', text: `Board <b>${o.route_name}</b> → ${o.headsign || ''}` },
+    { ph: 'ride', icon: '🚏', text: `Ride <b>${o.num_stops} stop${o.num_stops > 1 ? 's' : ''}</b>, get off at <b>${o.alight.stop_name}</b>` },
+    { ph: 'walk_dest', icon: '📍', text: `Walk to destination (${o.alight.walk_min} min)` },
+  ];
+  document.getElementById('nav-steps').innerHTML = steps.map(s => {
+    const si = order.indexOf(s.ph);
+    const cls = nav.phase === 'done' ? 'done' : si < curIdx ? 'done' : si === curIdx ? 'current' : '';
+    return `<div class="nav-step ${cls}"><span class="nav-step-icon">${s.icon}</span><span class="nav-step-text">${s.text}</span></div>`;
+  }).join('');
+
+  // Phase-appropriate action buttons.
+  const actions = document.getElementById('nav-actions');
+  if (nav.phase === 'walk_board') {
+    actions.innerHTML = `<button class="nav-btn" onclick="setPhase('wait')">I'm at the stop →</button>`;
+  } else if (nav.phase === 'wait') {
+    actions.innerHTML = `<button class="nav-btn ghost" onclick="setPhase('walk_board')">← Back</button><button class="nav-btn" onclick="boardBus()">I'm on the bus →</button>`;
+  } else if (nav.phase === 'ride') {
+    actions.innerHTML = `<button class="nav-btn" onclick="setPhase('walk_dest')">I got off →</button>`;
+  } else if (nav.phase === 'walk_dest') {
+    actions.innerHTML = `<button class="nav-btn" onclick="setPhase('done')">I've arrived →</button>`;
+  } else if (nav.phase === 'done') {
+    actions.innerHTML = `<button class="nav-btn" onclick="stopTrip()">Finish</button>`;
+  }
+}
+
+// When the user boards, lock onto the nearest live bus on the route at the board stop.
+function boardBus() {
+  const buses = busesOnRoute().map(v => ({ v, ...nearestStopIdx(v.lat, v.lng) }))
+    .sort((a, b) => Math.abs(a.idx - nav.boardIdx) - Math.abs(b.idx - nav.boardIdx));
+  nav.myBusId = buses.length ? buses[0].v.vehicleId : null;
+  setPhase('ride');
+}
+
+function stopTrip() {
+  nav = { active: false };
+  document.getElementById('nav-sheet').classList.remove('open');
+  shapeLayer.clearLayers();
+  document.getElementById('backdrop').classList.remove('visible');
 }
 
 // ── Favourites (Home / Work) ──
