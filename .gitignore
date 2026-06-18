@@ -1,0 +1,12 @@
+node_modules/
+.expo/
+dist/
+*.db
+*.db-shm
+*.db-wal
+scripts/data/*.zip
+scripts/data/prasarana-*/
+.env
+.env.local
+android/
+ios/

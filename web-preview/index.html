@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Bus Tracking MY</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fff; overflow: hidden; }
+
+    /* ── Header ── */
+    #header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      background: #1565C0; color: white; height: 52px;
+      display: flex; align-items: center; padding: 0 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    #header-logo { display: flex; align-items: center; gap: 8px; flex: 1; }
+    #header-logo h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+    #header-logo .flag { font-size: 18px; line-height: 1; }
+    #live-dot {
+      width: 8px; height: 8px; background: #69F0AE; border-radius: 50%;
+      animation: pulse-dot 2s ease-in-out infinite; flex-shrink: 0;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+    #freshness { font-size: 11px; opacity: 0.8; margin-left: 6px; white-space: nowrap; }
+
+    /* ── Search bar ── */
+    #search-bar {
+      position: fixed; top: 60px; left: 12px; right: 12px; z-index: 900;
+    }
+    #search-input {
+      width: 100%; padding: 10px 16px 10px 40px;
+      border: none; border-radius: 24px; font-size: 14px;
+      background: white; color: #111;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+      outline: none;
+    }
+    #search-input::placeholder { color: #aaa; }
+    #search-icon {
+      position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+      font-size: 16px; pointer-events: none;
+    }
+    #search-results {
+      display: none; margin-top: 6px;
+      background: white; border-radius: 16px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+      max-height: 240px; overflow-y: auto;
+    }
+    #search-results.visible { display: block; }
+    .search-result {
+      padding: 12px 16px; border-bottom: 1px solid #f5f5f5;
+      cursor: pointer; display: flex; align-items: center; gap: 10px;
+    }
+    .search-result:last-child { border-bottom: none; }
+    .search-result:hover, .search-result:active { background: #F3F8FF; }
+    .search-result-code {
+      font-size: 11px; font-weight: 700; color: #1565C0;
+      background: #E3F2FD; padding: 2px 6px; border-radius: 4px;
+      min-width: 36px; text-align: center; flex-shrink: 0;
+    }
+    .search-result-name { font-size: 13px; color: #222; flex: 1; }
+
+    /* ── Map ── */
+    #map { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; }
+
+    /* ── Locate me FAB ── */
+    #locate-btn {
+      position: fixed; right: 14px; bottom: 28px; z-index: 900;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: white; border: none; cursor: pointer;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; transition: transform 0.15s;
+    }
+    #locate-btn:active { transform: scale(0.92); }
+    #locate-btn.locating { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Bus stop markers (SVG) ── */
+    .stop-dot {
+      width: 18px; height: 18px; background: #1565C0;
+      border: 2.5px solid white; border-radius: 50%;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.35);
+      cursor: pointer; transition: transform 0.15s;
+    }
+    .stop-dot:hover, .stop-dot:active { transform: scale(1.35); background: #0D47A1; }
+    .stop-dot.has-imminent { background: #E53935; animation: stop-pulse 1.5s ease-in-out infinite; }
+    @keyframes stop-pulse {
+      0%, 100% { box-shadow: 0 1px 5px rgba(229,57,53,0.4); }
+      50% { box-shadow: 0 0 0 6px rgba(229,57,53,0.15); }
+    }
+
+    /* ── Bottom sheet ── */
+    #sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
+      background: white; border-radius: 20px 20px 0 0;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.14);
+      transform: translateY(100%);
+      transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+      max-height: 70vh; display: flex; flex-direction: column;
+      will-change: transform;
+    }
+    #sheet.open { transform: translateY(0); }
+    .sheet-handle {
+      width: 36px; height: 4px; background: #e0e0e0; border-radius: 2px;
+      margin: 10px auto 6px; flex-shrink: 0;
+    }
+
+    /* ── Stop header ── */
+    #sheet-header {
+      padding: 6px 16px 12px; border-bottom: 1px solid #f2f2f2; flex-shrink: 0;
+    }
+    #sheet-header-row { display: flex; align-items: flex-start; justify-content: space-between; }
+    #stop-meta { flex: 1; }
+    #stop-badge-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    #stop-code-chip {
+      font-size: 11px; font-weight: 700; color: #1565C0;
+      background: #E3F2FD; padding: 2px 8px; border-radius: 20px;
+    }
+    #stop-distance { font-size: 11px; color: #888; }
+    #stop-name { font-size: 16px; font-weight: 700; color: #111; line-height: 1.3; }
+    #close-btn {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: #f5f5f5; border: none; cursor: pointer;
+      font-size: 13px; color: #666; flex-shrink: 0; margin-left: 12px;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ── Next bus hero ── */
+    #next-bus-hero {
+      margin: 12px 16px 0; padding: 14px 16px;
+      border-radius: 14px; flex-shrink: 0;
+      background: #E8F5E9; border: 1.5px solid #A5D6A7;
+      display: flex; align-items: center; gap: 12px;
+    }
+    #next-bus-hero.soon { background: #FFF3E0; border-color: #FFCC02; }
+    #next-bus-hero.urgent { background: #FFEBEE; border-color: #EF9A9A; }
+    #next-bus-hero.empty { background: #F5F5F5; border-color: #E0E0E0; }
+    #next-bus-time {
+      font-size: 36px; font-weight: 800; color: #2E7D32; line-height: 1;
+      min-width: 72px; text-align: center;
+    }
+    #next-bus-hero.soon #next-bus-time { color: #E65100; }
+    #next-bus-hero.urgent #next-bus-time { color: #C62828; }
+    #next-bus-hero.empty #next-bus-time { font-size: 22px; color: #999; }
+    #next-bus-label { font-size: 11px; color: #555; margin-top: 2px; }
+    #next-bus-info { flex: 1; }
+    #next-bus-route { font-size: 15px; font-weight: 700; color: #111; }
+    #next-bus-headsign { font-size: 12px; color: #666; margin-top: 2px; }
+    .next-bus-unit { font-size: 14px; font-weight: 600; }
+
+    /* ── Arrivals list ── */
+    #arrivals-section { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .arrivals-label {
+      font-size: 11px; font-weight: 700; color: #bbb; letter-spacing: 0.8px;
+      padding: 12px 16px 6px; text-transform: uppercase;
+    }
+    .arrival-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; border-bottom: 1px solid #fafafa;
+    }
+    .arrival-row:last-child { border-bottom: none; }
+    .arr-route {
+      min-width: 46px; text-align: center;
+      font-size: 12px; font-weight: 700; color: #1565C0;
+      background: #E3F2FD; padding: 4px 6px; border-radius: 6px;
+    }
+    .arr-headsign { flex: 1; font-size: 13px; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .arr-time {
+      font-size: 14px; font-weight: 700; min-width: 50px; text-align: right;
+      padding: 4px 8px; border-radius: 8px;
+    }
+    .arr-time.green { color: #2E7D32; background: #E8F5E9; }
+    .arr-time.amber { color: #E65100; background: #FFF3E0; }
+    .arr-time.grey { color: #888; background: #F5F5F5; }
+    .loading-row { padding: 28px; display: flex; justify-content: center; }
+    .spinner { width: 22px; height: 22px; border: 3px solid #eee; border-top-color: #1565C0; border-radius: 50%; animation: spin-s 0.8s linear infinite; }
+    @keyframes spin-s { to { transform: rotate(360deg); } }
+    .empty-arrivals { padding: 24px 16px; text-align: center; color: #bbb; font-size: 14px; }
+
+    /* ── Confirm button ── */
+    #confirm-section {
+      padding: 12px 16px 20px; flex-shrink: 0;
+      border-top: 1px solid #f2f2f2;
+    }
+    #confirm-btn {
+      width: 100%; padding: 14px; background: #1565C0; color: white;
+      border: none; border-radius: 14px; font-size: 15px; font-weight: 700;
+      cursor: pointer; transition: all 0.15s; display: flex; align-items: center;
+      justify-content: center; gap: 8px;
+    }
+    #confirm-btn:active { transform: scale(0.97); background: #0D47A1; }
+    #confirm-btn.sent { background: #2E7D32; }
+    #confirm-sub { text-align: center; font-size: 11px; color: #bbb; margin-top: 6px; }
+
+    /* ── Overlay backdrop ── */
+    #backdrop {
+      display: none; position: fixed; inset: 0; z-index: 999;
+      background: rgba(0,0,0,0.25);
+    }
+    #backdrop.visible { display: block; }
+
+    /* ── Scheduled notice ── */
+    #scheduled-notice {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 16px 0; font-size: 11px; color: #aaa; flex-shrink: 0;
+    }
+    #scheduled-notice::before { content: 'ℹ'; font-size: 11px; }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <div id="header-logo">
+    <span class="flag">🇲🇾</span>
+    <h1>Bus Tracking MY</h1>
+    <div id="live-dot"></div>
+    <span id="freshness">Connecting…</span>
+  </div>
+</div>
+
+<div id="search-bar">
+  <div style="position:relative">
+    <span id="search-icon">🔍</span>
+    <input id="search-input" type="text" placeholder="Search for a bus stop…" autocomplete="off" />
+  </div>
+  <div id="search-results"></div>
+</div>
+
+<div id="map"></div>
+
+<button id="locate-btn" title="Centre on my location">📍</button>
+
+<div id="backdrop" onclick="closeSheet()"></div>
+
+<!-- Bottom sheet -->
+<div id="sheet">
+  <div class="sheet-handle"></div>
+
+  <div id="sheet-header">
+    <div id="sheet-header-row">
+      <div id="stop-meta">
+        <div id="stop-badge-row">
+          <span id="stop-code-chip"></span>
+          <span id="stop-distance"></span>
+        </div>
+        <div id="stop-name"></div>
+      </div>
+      <button id="close-btn" onclick="closeSheet()">✕</button>
+    </div>
+  </div>
+
+  <!-- Next bus hero -->
+  <div id="next-bus-hero" class="empty">
+    <div>
+      <div id="next-bus-time">—</div>
+      <div id="next-bus-label">Next bus</div>
+    </div>
+    <div id="next-bus-info">
+      <div id="next-bus-route"></div>
+      <div id="next-bus-headsign"></div>
+    </div>
+  </div>
+
+  <div id="scheduled-notice">Scheduled times — live delays available in 2026</div>
+
+  <!-- All arrivals -->
+  <div id="arrivals-section">
+    <div class="arrivals-label">Upcoming arrivals</div>
+    <div id="arrivals-list"><div class="loading-row"><div class="spinner"></div></div></div>
+  </div>
+
+  <!-- Confirm -->
+  <div id="confirm-section">
+    <button id="confirm-btn" onclick="handleConfirm()">
+      <span>🚌</span> <span id="confirm-label">Bus is here — tap to confirm</span>
+    </button>
+    <div id="confirm-sub">Help your fellow commuters. Your location is logged anonymously.</div>
+  </div>
+</div>
+
+<script>
+const PROXY = 'http://localhost:3001';
+let map, vehicleLayer, stopLayer, userMarker;
+let selectedStop = null;
+let confirmCount = 0;
+let allStops = [];
+let userLocation = null; // { lat, lng }
+let eventSource = null;
+
+// ── Map init ──────────────────────────────────────────────────────────────────
+function initMap() {
+  map = L.map('map', { zoomControl: false, attributionControl: true })
+    .setView([3.149, 101.66], 13);
+  L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://openstreetmap.org">OSM</a>',
+    maxZoom: 19,
+  }).addTo(map);
+
+  vehicleLayer = L.layerGroup().addTo(map);
+  stopLayer = L.layerGroup().addTo(map);
+
+  map.on('moveend', loadNearbyStops);
+  map.on('click', () => { if (selectedStop) closeSheet(); });
+
+  // Try to locate user on load
+  locateUser();
+}
+
+// ── Geolocation ───────────────────────────────────────────────────────────────
+function locateUser() {
+  if (!navigator.geolocation) return;
+  document.getElementById('locate-btn').classList.add('locating');
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      map.setView([userLocation.lat, userLocation.lng], 15);
+      updateUserMarker();
+      document.getElementById('locate-btn').classList.remove('locating');
+    },
+    () => { document.getElementById('locate-btn').classList.remove('locating'); },
+    { timeout: 8000, maximumAge: 30000 }
+  );
+}
+
+function updateUserMarker() {
+  if (!userLocation) return;
+  if (userMarker) userMarker.remove();
+  const icon = L.divIcon({
+    html: `<div style="width:16px;height:16px;background:#2979FF;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(41,121,255,0.25)"></div>`,
+    className: '', iconSize: [16, 16], iconAnchor: [8, 8],
+  });
+  userMarker = L.marker([userLocation.lat, userLocation.lng], { icon, zIndexOffset: 500 })
+    .bindTooltip('You are here', { direction: 'top', offset: [0, -10] })
+    .addTo(map);
+}
+
+document.getElementById('locate-btn').addEventListener('click', () => {
+  if (userLocation) {
+    map.setView([userLocation.lat, userLocation.lng], 15);
+  } else {
+    locateUser();
+  }
+});
+
+// ── Vehicle rendering ─────────────────────────────────────────────────────────
+function renderVehicles(vehicles) {
+  vehicleLayer.clearLayers();
+  // Deduplicate by position (cluster very close buses)
+  vehicles.forEach(v => {
+    const routeCode = v.label || v.routeId || '?';
+    const icon = L.divIcon({
+      html: `<div style="
+        background: rgba(21,101,192,0.75);
+        color: white; font-size: 9px; font-weight: 700;
+        padding: 2px 4px; border-radius: 4px;
+        white-space: nowrap; line-height: 1.3;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        pointer-events: none;
+      ">${routeCode}</div>`,
+      className: '', iconAnchor: [0, 0],
+    });
+    L.marker([v.lat, v.lng], { icon, zIndexOffset: 200 })
+      .bindTooltip(
+        `<b>${routeCode}</b>${v.tripId ? '<br>Trip ' + v.tripId.slice(-6) : ''}`,
+        { direction: 'top', offset: [0, -4] }
+      )
+      .addTo(vehicleLayer);
+  });
+}
+
+// ── SSE stream ────────────────────────────────────────────────────────────────
+function connectStream() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`${PROXY}/stream`);
+  eventSource.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'snapshot' && msg.vehicles) {
+      renderVehicles(msg.vehicles);
+      updateFreshness(msg.fetchedAt);
+    } else if (msg.type === 'update') {
+      fetch(`${PROXY}/vehicles`)
+        .then(r => r.json())
+        .then(d => { renderVehicles((d.features||[]).map(f=>f.properties)); updateFreshness(d.fetchedAt); });
+    }
+  };
+  eventSource.onerror = () => {
+    document.getElementById('freshness').textContent = 'Reconnecting…';
+    setTimeout(connectStream, 5000);
+  };
+}
+
+function updateFreshness(ts) {
+  const secs = Math.round((Date.now() - ts) / 1000);
+  const el = document.getElementById('freshness');
+  el.textContent = secs < 5 ? 'Live' : `${secs}s ago`;
+}
+setInterval(() => {
+  // recalculate freshness without re-fetching
+  fetch(`${PROXY}/health`).then(r=>r.json()).then(d=>updateFreshness(d.fetchedAt)).catch(()=>{});
+}, 15000);
+
+// ── Nearby stops ──────────────────────────────────────────────────────────────
+async function loadNearbyStops() {
+  const zoom = map.getZoom();
+  if (zoom < 13) { stopLayer.clearLayers(); allStops = []; return; }
+  const center = map.getCenter();
+  const radius = zoom >= 15 ? 0.8 : zoom >= 14 ? 1.2 : 2;
+  try {
+    const r = await fetch(`${PROXY}/stops/nearby?lat=${center.lat}&lng=${center.lng}&radius=${radius}`);
+    const data = await r.json();
+    renderStops(data.stops || []);
+  } catch {}
+}
+
+function renderStops(stops) {
+  stopLayer.clearLayers();
+  allStops = stops;
+  stops.forEach(stop => {
+    const icon = L.divIcon({
+      html: `<div class="stop-dot"></div>`,
+      className: '', iconSize: [18, 18], iconAnchor: [9, 9],
+    });
+    L.marker([stop.stop_lat, stop.stop_lon], { icon })
+      .on('click', (e) => { L.DomEvent.stopPropagation(e); openStop(stop); })
+      .bindTooltip(stop.stop_name, { direction: 'top', offset: [0, -10], className: 'stop-tip' })
+      .addTo(stopLayer);
+  });
+}
+
+// ── Distance helper ───────────────────────────────────────────────────────────
+function haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function formatDist(m) {
+  return m < 1000 ? `${Math.round(m)}m away` : `${(m/1000).toFixed(1)}km away`;
+}
+
+// ── Stop detail sheet ─────────────────────────────────────────────────────────
+async function openStop(stop) {
+  selectedStop = stop;
+  confirmCount = 0;
+
+  // Stop header
+  document.getElementById('stop-code-chip').textContent = stop.stop_code || stop.stop_id;
+  document.getElementById('stop-name').textContent = stop.stop_name;
+  const distEl = document.getElementById('stop-distance');
+  if (userLocation) {
+    const m = haversineM(userLocation.lat, userLocation.lng, stop.stop_lat, stop.stop_lon);
+    distEl.textContent = formatDist(m);
+  } else {
+    distEl.textContent = '';
+  }
+
+  // Reset hero + list
+  setHero(null);
+  document.getElementById('arrivals-list').innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
+  document.getElementById('confirm-btn').className = '';
+  document.getElementById('confirm-label').textContent = 'Bus is here — tap to confirm';
+  document.getElementById('confirm-sub').textContent = 'Help your fellow commuters. Your location is logged anonymously.';
+
+  // Open sheet + backdrop
+  document.getElementById('sheet').classList.add('open');
+  document.getElementById('backdrop').classList.add('visible');
+
+  // Scroll search results away
+  document.getElementById('search-results').classList.remove('visible');
+  document.getElementById('search-input').blur();
+
+  // Pan map to show stop above the sheet
+  map.panTo([stop.stop_lat, stop.stop_lon], { animate: true });
+
+  // Fetch arrivals
+  try {
+    const r = await fetch(`${PROXY}/arrivals/${encodeURIComponent(stop.stop_id)}`);
+    const data = await r.json();
+    renderArrivals(data.arrivals || []);
+  } catch {
+    document.getElementById('arrivals-list').innerHTML = '<div class="empty-arrivals">Could not load arrivals</div>';
+  }
+}
+
+function setHero(arrivals) {
+  const hero = document.getElementById('next-bus-hero');
+  if (!arrivals || arrivals.length === 0) {
+    hero.className = 'empty';
+    document.getElementById('next-bus-time').textContent = '—';
+    document.getElementById('next-bus-route').textContent = 'No more buses today';
+    document.getElementById('next-bus-headsign').textContent = '';
+    return;
+  }
+  const first = arrivals[0];
+  const t = parseDiff(first.arrival_time);
+  document.getElementById('next-bus-route').textContent = first.route_name;
+  document.getElementById('next-bus-headsign').textContent = first.trip_headsign;
+  if (t.diffMin <= 0) {
+    document.getElementById('next-bus-time').innerHTML = 'Now';
+    hero.className = 'urgent';
+  } else if (t.diffMin < 10) {
+    document.getElementById('next-bus-time').innerHTML = `${t.diffMin}<span class="next-bus-unit"> min</span>`;
+    hero.className = 'urgent';
+  } else if (t.diffMin < 20) {
+    document.getElementById('next-bus-time').innerHTML = `${t.diffMin}<span class="next-bus-unit"> min</span>`;
+    hero.className = 'soon';
+  } else {
+    document.getElementById('next-bus-time').innerHTML = `${t.text}`;
+    hero.className = '';
+  }
+}
+
+function parseDiff(timeStr) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const now = new Date();
+  const diffMin = (h * 60 + m) - (now.getHours() * 60 + now.getMinutes());
+  const text = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  return { diffMin, text };
+}
+
+function arrivalTimeClass(diffMin) {
+  if (diffMin <= 5) return 'green';
+  if (diffMin <= 15) return 'amber';
+  return 'grey';
+}
+
+function renderArrivals(arrivals) {
+  setHero(arrivals);
+  if (!arrivals.length) {
+    document.getElementById('arrivals-list').innerHTML = '<div class="empty-arrivals">No more arrivals today</div>';
+    return;
+  }
+  const rows = arrivals.slice(1).map(a => { // skip first (shown in hero)
+    const t = parseDiff(a.arrival_time);
+    const cls = arrivalTimeClass(t.diffMin);
+    const label = t.diffMin <= 0 ? 'Now' : t.diffMin < 60 ? `${t.diffMin} min` : t.text;
+    return `<div class="arrival-row">
+      <span class="arr-route">${a.route_name}</span>
+      <span class="arr-headsign">${a.trip_headsign}</span>
+      <span class="arr-time ${cls}">${label}</span>
+    </div>`;
+  });
+  document.getElementById('arrivals-list').innerHTML =
+    rows.length ? rows.join('') : '<div class="empty-arrivals" style="padding:12px 16px;font-size:12px;color:#ccc">No further arrivals today</div>';
+}
+
+function closeSheet() {
+  document.getElementById('sheet').classList.remove('open');
+  document.getElementById('backdrop').classList.remove('visible');
+  selectedStop = null;
+}
+
+function handleConfirm() {
+  if (!selectedStop) return;
+  confirmCount++;
+  const btn = document.getElementById('confirm-btn');
+  btn.className = 'sent';
+  document.getElementById('confirm-label').textContent = '✓ Confirmed — thank you!';
+  document.getElementById('confirm-sub').textContent =
+    `${confirmCount} confirmation${confirmCount > 1 ? 's' : ''} sent. You're helping other commuters.`;
+  setTimeout(() => {
+    btn.className = '';
+    document.getElementById('confirm-label').textContent = 'Bus is here — tap to confirm';
+  }, 3000);
+  console.log('Confirmation for', selectedStop.stop_id);
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+
+async function doSearch(query) {
+  if (!query || query.length < 2) { searchResults.classList.remove('visible'); return; }
+  // Search from currently loaded stops first
+  const lower = query.toLowerCase();
+  const matches = allStops
+    .filter(s => s.stop_name.toLowerCase().includes(lower) || (s.stop_code||'').toLowerCase().includes(lower))
+    .slice(0, 8);
+
+  if (!matches.length) { searchResults.classList.remove('visible'); return; }
+
+  searchResults.innerHTML = matches.map(s => `
+    <div class="search-result" onclick="selectSearchResult('${s.stop_id}')">
+      <span class="search-result-code">${s.stop_code || s.stop_id.slice(-4)}</span>
+      <span class="search-result-name">${s.stop_name}</span>
+    </div>
+  `).join('');
+  searchResults.classList.add('visible');
+}
+
+function selectSearchResult(stopId) {
+  const stop = allStops.find(s => s.stop_id === stopId);
+  if (!stop) return;
+  searchInput.value = stop.stop_name;
+  searchResults.classList.remove('visible');
+  map.setView([stop.stop_lat, stop.stop_lon], 16);
+  setTimeout(() => openStop(stop), 400);
+}
+
+searchInput.addEventListener('input', (e) => doSearch(e.target.value));
+searchInput.addEventListener('focus', (e) => { if (e.target.value.length >= 2) doSearch(e.target.value); });
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('search-bar').contains(e.target)) {
+    searchResults.classList.remove('visible');
+  }
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+initMap();
+connectStream();
+fetch(`${PROXY}/vehicles`)
+  .then(r => r.json())
+  .then(d => { renderVehicles((d.features||[]).map(f=>f.properties)); updateFreshness(d.fetchedAt); });
+</script>
+</body>
+</html>
