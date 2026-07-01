@@ -235,6 +235,8 @@
     .journey-head-headsign { flex: 1; font-size: 12px; color: var(--later); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .journey-depart { font-size: 12px; font-weight: 800; color: var(--go); }
     .journey-best-tag { font-size: 10px; font-weight: 800; color: var(--amberInk); background: var(--chip); padding: 2px 7px; border-radius: 10px; }
+    .journey-transfer-tag { font-size: 10px; font-weight: 800; color: var(--teal); background: #E6F4F2; padding: 2px 7px; border-radius: 10px; }
+    .transfer-card { border-color: #C8EAE6; }
     .journey-step { display: flex; align-items: flex-start; gap: 10px; padding: 3px 0; }
     .journey-step-icon { width: 20px; text-align: center; font-size: 13px; flex-shrink: 0; }
     .journey-step-text { flex: 1; font-size: 13px; color: var(--ink); line-height: 1.35; }
@@ -981,10 +983,11 @@ function renderPlan(options) {
   planOptions = options;
   if (!options.length) {
     shapeLayer.clearLayers();
-    list.innerHTML = `<div class="empty-arrivals">No direct bus to here right now.<br><span style="font-size:12px;color:var(--faint)">Trips with a transfer are coming soon.</span></div>`;
+    list.innerHTML = `<div class="empty-arrivals">No routes found right now.</div>`;
     return;
   }
   list.innerHTML = options.map((o, i) => {
+    if (o.type === 'transfer') return renderTransferCard(o, i);
     const dm = planMins(o.depart);
     const departLabel = dm <= 0 ? 'now' : dm < 60 ? `in ${dm} min` : `at ${fmtClock(o.depart)}`;
     return `<div class="journey-card ${i === 0 ? 'best' : ''}" onclick="drawPlan(${i})">
@@ -1005,6 +1008,33 @@ function renderPlan(options) {
     </div>`;
   }).join('');
   drawPlan(0);
+}
+
+function renderTransferCard(o, i) {
+  const dm1 = planMins(o.leg1.depart);
+  const departLabel = dm1 <= 0 ? 'now' : dm1 < 60 ? `in ${dm1} min` : `at ${fmtClock(o.leg1.depart)}`;
+  const dm2 = planMins(o.leg2.depart);
+  const leg2Label = dm2 <= 0 ? 'now' : `at ${fmtClock(o.leg2.depart)}`;
+  const totalMin = Math.round((dm2 < 0 ? 0 : dm2) + o.leg2.num_stops * 1.5 + (o.leg2.alight.walk_min || 0));
+  return `<div class="journey-card transfer-card" onclick="drawPlan(${i})">
+    <div class="journey-head">
+      <span class="journey-route ${o.leg1.service_type}">${o.leg1.route_name}</span>
+      <span style="font-size:11px;color:var(--muted);margin:0 4px">→</span>
+      <span class="journey-route ${o.leg2.service_type}">${o.leg2.route_name}</span>
+      <span class="journey-transfer-tag">1 transfer</span>
+      <span class="journey-depart">${departLabel}</span>
+    </div>
+    <div class="journey-step"><span class="journey-step-icon">🚶</span><span class="journey-step-text">Walk <b>${o.leg1.board.walk_min} min</b> to <b>${o.leg1.board.stop_name}</b></span></div>
+    <div class="journey-rail">│</div>
+    <div class="journey-step"><span class="journey-step-icon">🚌</span><span class="journey-step-text">Board <b>${o.leg1.route_name}</b> · <b>${o.leg1.num_stops} stop${o.leg1.num_stops !== 1 ? 's' : ''}</b> <span class="sub">(departs ${fmtClock(o.leg1.depart)})</span></span></div>
+    <div class="journey-rail">│</div>
+    <div class="journey-step"><span class="journey-step-icon">🔄</span><span class="journey-step-text">Transfer at <b>${o.transfer_stop.stop_name}</b> · board <b>${o.leg2.route_name}</b> <span class="sub">(${leg2Label})</span></span></div>
+    <div class="journey-rail">│</div>
+    <div class="journey-step"><span class="journey-step-icon">🚌</span><span class="journey-step-text">Ride <b>${o.leg2.num_stops} stop${o.leg2.num_stops !== 1 ? 's' : ''}</b> · get off at <b>${o.leg2.alight.stop_name}</b></span></div>
+    <div class="journey-rail">│</div>
+    <div class="journey-step"><span class="journey-step-icon">📍</span><span class="journey-step-text">Walk <b>${o.leg2.alight.walk_min || '?'} min</b> to your destination</span></div>
+    <button class="journey-start" onclick="event.stopPropagation(); startTrip(${i})">▶ Start</button>
+  </div>`;
 }
 async function drawPlan(i) {
   const o = planOptions[i];
@@ -1362,7 +1392,8 @@ async function doSearch(query) {
         <span class=”search-result-name”>${s.stop_name}</span>
       </div>`).join('');
     const placeHTML = placeHits.map((p, i) => {
-      const short = p.display_name.split(',').slice(0, 2).join(',').trim();
+      // Use OSM 'name' field (just the place name); fall back to first display_name segment.
+      const short = p.name || p.display_name.split(',')[0].trim();
       return `<div class=”search-result” onclick='selectPlaceResult(${i})'>
         <span class=”search-result-place”>📍</span>
         <span class=”search-result-name”>${short}</span>

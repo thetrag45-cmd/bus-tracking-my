@@ -464,6 +464,206 @@ function getPlan(fromLat: number, fromLng: number, toLat: number, toLng: number)
   return { options };
 }
 
+// 1-transfer trip planner. Runs when the direct planner finds fewer than 2 options.
+type TransferLeg = {
+  route_id: string; route_name: string; service_type: "feeder" | "trunk";
+  depart: string; num_stops: number;
+  board: { stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; walk_m: number; walk_min: number };
+  alight: { stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; walk_m?: number; walk_min?: number };
+};
+type TransferOption = {
+  type: "transfer";
+  leg1: TransferLeg; leg2: TransferLeg;
+  transfer_stop: { stop_id: string; stop_name: string; lat: number; lng: number };
+};
+
+function getTransferPlan(fromLat: number, fromLng: number, toLat: number, toLng: number): TransferOption[] {
+  if (!db) return [];
+
+  const boardStops = getNearbyStops(fromLat, fromLng, 1.0, 12);
+  const alightStops = getNearbyStops(toLat, toLng, 1.0, 12);
+  if (!boardStops.length || !alightStops.length) return [];
+
+  const boardById = new Map(boardStops.map((s) => [s.stop_id, s]));
+  const alightById = new Map(alightStops.map((s) => [s.stop_id, s]));
+  const bIds = boardStops.map((s) => s.stop_id);
+  const aIds = alightStops.map((s) => s.stop_id);
+  const bPh = bIds.map(() => "?").join(",");
+  const aPh = aIds.map(() => "?").join(",");
+
+  type RteRow = { route_id: string; route_name: string; category: string; stop_id: string };
+
+  const fromRteRows = db
+    .query<RteRow, string[]>(
+      `SELECT DISTINCT t.route_id,
+        COALESCE(NULLIF(r.route_short_name,''), r.route_id) AS route_name,
+        r.category, st.stop_id
+       FROM stop_times st
+       JOIN trips t ON t.trip_id = st.trip_id
+       JOIN routes r ON r.route_id = t.route_id
+       WHERE st.stop_id IN (${bPh})`
+    )
+    .all(bIds);
+
+  const toRteRows = db
+    .query<RteRow, string[]>(
+      `SELECT DISTINCT t.route_id,
+        COALESCE(NULLIF(r.route_short_name,''), r.route_id) AS route_name,
+        r.category, st.stop_id
+       FROM stop_times st
+       JOIN trips t ON t.trip_id = st.trip_id
+       JOIN routes r ON r.route_id = t.route_id
+       WHERE st.stop_id IN (${aPh})`
+    )
+    .all(aIds);
+
+  const fromRouteIds = [...new Set(fromRteRows.map((r) => r.route_id))];
+  const toRouteIds   = [...new Set(toRteRows.map((r) => r.route_id))];
+  if (!fromRouteIds.length || !toRouteIds.length) return [];
+
+  const bestBoardStop = new Map<string, NearbyStop>();
+  for (const r of fromRteRows) {
+    const s = boardById.get(r.stop_id);
+    if (!s) continue;
+    const prev = bestBoardStop.get(r.route_id);
+    if (!prev || s.walk_m < prev.walk_m) bestBoardStop.set(r.route_id, s);
+  }
+  const bestAlightStop = new Map<string, NearbyStop>();
+  for (const r of toRteRows) {
+    const s = alightById.get(r.stop_id);
+    if (!s) continue;
+    const prev = bestAlightStop.get(r.route_id);
+    if (!prev || s.walk_m < prev.walk_m) bestAlightStop.set(r.route_id, s);
+  }
+
+  // The two GTFS feeds (rapid-bus-mrtfeeder: stop IDs 12xxxxxx, rapid-bus-kl: 1xxxxxx)
+  // use completely separate stop ID namespaces — the same physical bus bay has different IDs
+  // in each feed. So we can't match transfer stops by stop_id equality; instead we do a
+  // geographic proximity match (≤150 m) in JS across all stops served by each route set.
+
+  type StopOnRoute = { stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; route_id: string };
+  const fPh = fromRouteIds.map(() => "?").join(",");
+  const tPh = toRouteIds.map(() => "?").join(",");
+
+  const fromStops = db
+    .query<StopOnRoute, string[]>(
+      `SELECT DISTINCT s.stop_id, s.stop_name, s.stop_lat, s.stop_lon, t.route_id
+       FROM stop_times st
+       JOIN trips t ON t.trip_id = st.trip_id
+       JOIN stops s ON s.stop_id = st.stop_id
+       WHERE t.route_id IN (${fPh})
+       LIMIT 600`
+    )
+    .all(fromRouteIds);
+
+  const toStops = db
+    .query<StopOnRoute, string[]>(
+      `SELECT DISTINCT s.stop_id, s.stop_name, s.stop_lat, s.stop_lon, t.route_id
+       FROM stop_times st
+       JOIN trips t ON t.trip_id = st.trip_id
+       JOIN stops s ON s.stop_id = st.stop_id
+       WHERE t.route_id IN (${tPh})
+       LIMIT 600`
+    )
+    .all(toRouteIds);
+
+  // Geographic proximity match: find (fromStop, toStop) pairs ≤150 m apart
+  // that belong to different routes. These are physical transfer points.
+  const XFER_M = 150;
+  type XferPair = { r1: string; r2: string; stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; board2_stop_id: string };
+  const seenPair = new Set<string>();
+  const xPairs: XferPair[] = [];
+
+  for (const fs of fromStops) {
+    for (const ts of toStops) {
+      if (fs.route_id === ts.route_id) continue;
+      const d = haversineM(fs.stop_lat, fs.stop_lon, ts.stop_lat, ts.stop_lon);
+      if (d > XFER_M) continue;
+      const key = `${fs.route_id}|${ts.route_id}`;
+      if (seenPair.has(key)) continue;
+      seenPair.add(key);
+      xPairs.push({ r1: fs.route_id, r2: ts.route_id,
+        stop_id: fs.stop_id, stop_name: fs.stop_name, stop_lat: fs.stop_lat, stop_lon: fs.stop_lon,
+        board2_stop_id: ts.stop_id });
+      if (xPairs.length >= 30) break;
+    }
+    if (xPairs.length >= 30) break;
+  }
+
+  const now = new Date();
+  const todayCol = DOW_COLUMNS[now.getDay()];
+  const todayDate = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const currentTime = nowTimeStr();
+
+  type TripRow = { depart: string; num_stops: number };
+
+  function nextDep(routeId: string, fromStop: string, toStop: string, notBefore: string): TripRow | null {
+    return db!
+      .query<TripRow, [string, string, string, string, string, string]>(
+        `SELECT b.departure_time AS depart, a.stop_sequence - b.stop_sequence AS num_stops
+         FROM stop_times b
+         JOIN stop_times a ON a.trip_id = b.trip_id AND a.stop_sequence > b.stop_sequence
+         JOIN trips t ON t.trip_id = b.trip_id
+         JOIN calendar c ON c.service_id = t.service_id
+         WHERE t.route_id = ? AND b.stop_id = ? AND a.stop_id = ?
+           AND b.departure_time >= ? AND c.${todayCol} = 1
+           AND c.start_date <= ? AND c.end_date >= ?
+         ORDER BY b.departure_time LIMIT 1`
+      )
+      .get(routeId, fromStop, toStop, notBefore, todayDate, todayDate);
+  }
+
+  const seen = new Set<string>();
+  const results: TransferOption[] = [];
+
+  for (const x of xPairs) {
+    const key = `${x.r1}|${x.r2}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const board = bestBoardStop.get(x.r1);
+    const alight = bestAlightStop.get(x.r2);
+    if (!board || !alight) continue;
+
+    const r1Info = fromRteRows.find((r) => r.route_id === x.r1)!;
+    const r2Info = toRteRows.find((r) => r.route_id === x.r2)!;
+
+    const leg1Trip = nextDep(x.r1, board.stop_id, x.stop_id, currentTime);
+    if (!leg1Trip) continue;
+
+    // Estimate arrival at transfer + 5 min walk buffer.
+    const leg1Mins = leg1Trip.num_stops * 1.5 + 5;
+    const [dh, dm, ds] = leg1Trip.depart.split(":").map(Number);
+    const transferAt = new Date(now);
+    transferAt.setHours(dh, dm + leg1Mins, ds || 0, 0);
+    const transferTime = `${String(transferAt.getHours()).padStart(2, "0")}:${String(transferAt.getMinutes()).padStart(2, "0")}:00`;
+
+    const leg2Trip = nextDep(x.r2, x.board2_stop_id, alight.stop_id, transferTime);
+    if (!leg2Trip) continue;
+
+    results.push({
+      type: "transfer",
+      transfer_stop: { stop_id: x.stop_id, stop_name: x.stop_name, lat: x.stop_lat, lng: x.stop_lon },
+      leg1: {
+        route_id: x.r1, route_name: r1Info.route_name, service_type: serviceType(r1Info.category),
+        depart: leg1Trip.depart, num_stops: leg1Trip.num_stops,
+        board: { stop_id: board.stop_id, stop_name: board.stop_name, stop_lat: board.stop_lat, stop_lon: board.stop_lon, walk_m: board.walk_m, walk_min: board.walk_min },
+        alight: { stop_id: x.stop_id, stop_name: x.stop_name, stop_lat: x.stop_lat, stop_lon: x.stop_lon },
+      },
+      leg2: {
+        route_id: x.r2, route_name: r2Info.route_name, service_type: serviceType(r2Info.category),
+        depart: leg2Trip.depart, num_stops: leg2Trip.num_stops,
+        board: { stop_id: x.stop_id, stop_name: x.stop_name, stop_lat: x.stop_lat, stop_lon: x.stop_lon, walk_m: 0, walk_min: 0 },
+        alight: { stop_id: alight.stop_id, stop_name: alight.stop_name, stop_lat: alight.stop_lat, stop_lon: alight.stop_lon, walk_m: alight.walk_m, walk_min: alight.walk_min },
+      },
+    });
+
+    if (results.length >= 3) break;
+  }
+
+  return results;
+}
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 openDb();
@@ -537,7 +737,7 @@ const server = Bun.serve({
       return Response.json(detail, { headers: CORS });
     }
 
-    // GET /plan?fromLat=&fromLng=&toLat=&toLng= — direct-bus trip planner
+    // GET /plan?fromLat=&fromLng=&toLat=&toLng= — direct + 1-transfer trip planner
     if (url.pathname === "/plan") {
       const fromLat = parseFloat(url.searchParams.get("fromLat") ?? "");
       const fromLng = parseFloat(url.searchParams.get("fromLng") ?? "");
@@ -546,7 +746,11 @@ const server = Bun.serve({
       if ([fromLat, fromLng, toLat, toLng].some(isNaN)) {
         return Response.json({ error: "fromLat,fromLng,toLat,toLng required" }, { status: 400, headers: CORS });
       }
-      return Response.json(getPlan(fromLat, fromLng, toLat, toLng), { headers: CORS });
+      const direct = getPlan(fromLat, fromLng, toLat, toLng);
+      const transfers = direct.options.length < 2
+        ? getTransferPlan(fromLat, fromLng, toLat, toLng)
+        : [];
+      return Response.json({ options: [...direct.options, ...transfers] }, { headers: CORS });
     }
 
     // GET /stops/search?q=sunway&limit=10 — name/code search across ALL stops
