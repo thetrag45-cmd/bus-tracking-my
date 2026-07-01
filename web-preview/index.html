@@ -78,6 +78,12 @@
       min-width: 36px; text-align: center; flex-shrink: 0;
     }
     .search-result-name { font-size: 13px; color: var(--ink); flex: 1; }
+    .search-result-place { font-size: 15px; min-width: 36px; text-align: center; flex-shrink: 0; }
+    .search-result-divider {
+      padding: 6px 16px 4px; font-size: 10px; font-weight: 800;
+      letter-spacing: 0.5px; text-transform: uppercase; color: var(--faint);
+      background: var(--cream); border-bottom: 1px solid var(--line2);
+    }
 
     /* ── Favourites chips (Moovit gap: Home/Work) ── */
     #fav-row {
@@ -940,10 +946,14 @@ function closeLine() {
 function closeAll() { closeSheet(); closeLine(); closeNearby(); closeDirections(); if (nav.active) stopTrip(); document.getElementById('backdrop').classList.remove('visible'); }
 
 // ── Directions / trip planner: "which stop + which bus to get there" ──
-async function openDirections() {
+function openDirections() {
   if (!selectedStop) return;
-  planDest = { stop_id: selectedStop.stop_id, name: selectedStop.stop_name, lat: selectedStop.stop_lat, lng: selectedStop.stop_lon };
-  // Origin priority: live location → saved Home → current map centre.
+  openDirectionsTo(selectedStop.stop_name, selectedStop.stop_lat, selectedStop.stop_lon);
+}
+
+async function openDirectionsTo(name, lat, lng) {
+  planDest = { name, lat, lng };
+  // Origin priority: live GPS → saved Home → current map centre.
   const origin = userLocation
     ? { lat: userLocation.lat, lng: userLocation.lng, label: 'your location' }
     : favs.home
@@ -954,11 +964,11 @@ async function openDirections() {
   selectedStop = null;
   document.getElementById('dir-sheet').classList.add('open');
   document.getElementById('backdrop').classList.add('visible');
-  document.getElementById('dir-route-label').textContent = `From ${origin.label} → ${planDest.name}`;
+  document.getElementById('dir-route-label').textContent = `From ${origin.label} → ${name}`;
   const list = document.getElementById('dir-list');
   list.innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
   try {
-    const r = await fetch(`${PROXY}/plan?fromLat=${origin.lat}&fromLng=${origin.lng}&toLat=${planDest.lat}&toLng=${planDest.lng}`);
+    const r = await fetch(`${PROXY}/plan?fromLat=${origin.lat}&fromLng=${origin.lng}&toLat=${lat}&toLng=${lng}`);
     renderPlan((await r.json()).options || []);
   } catch {
     list.innerHTML = '<div class="empty-arrivals">Could not plan this trip</div>';
@@ -1322,6 +1332,7 @@ function toast(msg) {
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
 let searchHits = [];        // full stop objects from the last query
+let placeHits = [];         // Nominatim place results from the last query
 let searchSeq = 0;          // guards against out-of-order async responses
 let searchTimer = null;
 async function doSearch(query) {
@@ -1329,21 +1340,36 @@ async function doSearch(query) {
   if (query.length < 2) { searchResults.classList.remove('visible'); return; }
   const seq = ++searchSeq;
   try {
-    // Search the WHOLE stops table on the backend, not just loaded-nearby stops.
-    const r = await fetch(`${PROXY}/stops/search?q=${encodeURIComponent(query)}&limit=10`);
-    const data = await r.json();
-    if (seq !== searchSeq) return; // a newer query already fired
-    searchHits = data.stops || [];
-    if (!searchHits.length) {
-      searchResults.innerHTML = '<div class="search-result" style="cursor:default"><span class="search-result-name" style="color:var(--faint)">No stops match “' + query + '”</span></div>';
+    // Run GTFS stop search and Nominatim place search in parallel.
+    const [stopsRes, placesRes] = await Promise.allSettled([
+      fetch(`${PROXY}/stops/search?q=${encodeURIComponent(query)}&limit=6`).then(r => r.json()),
+      fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}+Malaysia&countrycodes=my&format=json&limit=4&addressdetails=0`, {
+        headers: { 'Accept-Language': 'en', 'User-Agent': 'Godeez/1.0' }
+      }).then(r => r.json())
+    ]);
+    if (seq !== searchSeq) return;
+    searchHits = stopsRes.status === 'fulfilled' ? (stopsRes.value.stops || []) : [];
+    placeHits = placesRes.status === 'fulfilled' ? placesRes.value : [];
+
+    if (!searchHits.length && !placeHits.length) {
+      searchResults.innerHTML = `<div class=”search-result” style=”cursor:default”><span class=”search-result-name” style=”color:var(--faint)”>No results for “${query}”</span></div>`;
       searchResults.classList.add('visible');
       return;
     }
-    searchResults.innerHTML = searchHits.map(s => `
-      <div class="search-result" onclick='selectSearchResult(${JSON.stringify(s.stop_id)})'>
-        <span class="search-result-code">${s.stop_code || s.stop_id.slice(-4)}</span>
-        <span class="search-result-name">${s.stop_name}</span>
+    const stopHTML = searchHits.map(s => `
+      <div class=”search-result” onclick='selectSearchResult(${JSON.stringify(s.stop_id)})'>
+        <span class=”search-result-code”>${s.stop_code || s.stop_id.slice(-4)}</span>
+        <span class=”search-result-name”>${s.stop_name}</span>
       </div>`).join('');
+    const placeHTML = placeHits.map((p, i) => {
+      const short = p.display_name.split(',').slice(0, 2).join(',').trim();
+      return `<div class=”search-result” onclick='selectPlaceResult(${i})'>
+        <span class=”search-result-place”>📍</span>
+        <span class=”search-result-name”>${short}</span>
+      </div>`;
+    }).join('');
+    searchResults.innerHTML = stopHTML +
+      (placeHTML ? `<div class=”search-result-divider”>Places</div>${placeHTML}` : '');
     searchResults.classList.add('visible');
   } catch {
     if (seq === searchSeq) searchResults.classList.remove('visible');
@@ -1355,8 +1381,18 @@ function selectSearchResult(stopId) {
   searchInput.value = stop.stop_name;
   searchResults.classList.remove('visible');
   map.setView([stop.stop_lat, stop.stop_lon], 16);
-  loadNearbyStops(); // refresh map markers around the chosen stop
+  loadNearbyStops();
   setTimeout(() => openStop(stop), 400);
+}
+function selectPlaceResult(i) {
+  const p = placeHits[i];
+  if (!p) return;
+  const name = p.display_name.split(',').slice(0, 2).join(',').trim();
+  const lat = parseFloat(p.lat), lng = parseFloat(p.lon);
+  searchInput.value = name;
+  searchResults.classList.remove('visible');
+  map.setView([lat, lng], 15);
+  openDirectionsTo(name, lat, lng);
 }
 searchInput.addEventListener('input', (e) => {
   const v = e.target.value;
