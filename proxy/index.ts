@@ -149,8 +149,10 @@ function getUpcomingArrivals(stopId: string, limit = 6): ArrivalRow[] {
   const todayDate = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
 
   // Also handle GTFS "past-midnight" times (e.g. 25:30:00 for 1:30am next day)
-  // For simplicity in MVP, only query times >= now and < 24:00:00
-  return db
+  // For simplicity in MVP, only query times >= now and < 24:00:00.
+  // Frequency-based trips (rail) hold template times, so they bypass the
+  // departure filter and get their real next departure computed afterwards.
+  const rows = db
     .query<ArrivalRow, [string, string, string, string]>(
       `SELECT
         st.arrival_time,
@@ -165,7 +167,7 @@ function getUpcomingArrivals(stopId: string, limit = 6): ArrivalRow[] {
       JOIN routes r ON t.route_id = r.route_id
       JOIN calendar c ON t.service_id = c.service_id
       WHERE st.stop_id = ?
-        AND st.arrival_time >= ?
+        AND (st.arrival_time >= ? OR st.trip_id IN (SELECT trip_id FROM frequencies))
         AND st.arrival_time < '24:00:00'
         AND c.${todayCol} = 1
         AND c.start_date <= ?
@@ -173,7 +175,24 @@ function getUpcomingArrivals(stopId: string, limit = 6): ArrivalRow[] {
       ORDER BY st.arrival_time
       LIMIT ?`
     )
-    .all(stopId, currentTime, todayDate, todayDate, limit);
+    .all(stopId, currentTime, todayDate, todayDate, limit * 3);
+
+  const out: ArrivalRow[] = [];
+  const seenFreqRoute = new Set<string>();
+  for (const row of rows) {
+    if (isFreqTrip(row.trip_id)) {
+      // One entry per rail line+direction; compute the actual next train.
+      const key = `${row.route_id}|${row.trip_headsign}`;
+      if (seenFreqRoute.has(key)) continue;
+      const next = nextFreqDeparture(row.trip_id, tripBoardOffset(row.trip_id, row.departure_time), currentTime);
+      if (!next) continue;
+      seenFreqRoute.add(key);
+      out.push({ ...row, arrival_time: next.depart, departure_time: next.depart });
+    } else {
+      out.push(row);
+    }
+  }
+  return out.sort((a, b) => (a.arrival_time < b.arrival_time ? -1 : 1)).slice(0, limit);
 }
 
 type StopRow = {
@@ -185,9 +204,76 @@ type StopRow = {
 };
 
 // Service type derived from GTFS category — drives the route badge colour
-// (feeder = green, trunk = blue) per the Moovit teardown / Godeez brand.
-function serviceType(category: string): "feeder" | "trunk" {
+// (feeder = teal, trunk = sky, rail = per-line colour) per the Godeez brand.
+type ServiceType = "feeder" | "trunk" | "rail";
+function serviceType(category: string): ServiceType {
+  if (category === "rapid-rail-kl") return "rail";
   return category === "rapid-bus-mrtfeeder" ? "feeder" : "trunk";
+}
+
+// ── Frequency-based (headway) service — rail feeds ─────────────────────────────
+// Rail trips are templates: stop_times hold offsets from the trip's first stop,
+// and frequencies.txt says the template repeats every headway_secs within
+// [start_time, end_time]. All departure math for these trips goes through here.
+
+function timeToSecs(t: string): number {
+  const [h, m, s] = t.split(":").map(Number);
+  return h * 3600 + m * 60 + (s || 0);
+}
+function secsToTime(secs: number): string {
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+type FreqWindow = { start_time: string; end_time: string; headway_secs: number };
+let freqTripIds: Set<string> | null = null;
+const freqCache = new Map<string, FreqWindow[]>();
+
+function isFreqTrip(tripId: string): boolean {
+  if (!db) return false;
+  if (!freqTripIds) {
+    freqTripIds = new Set(
+      db.query<{ trip_id: string }, []>(`SELECT DISTINCT trip_id FROM frequencies`).all().map((r) => r.trip_id)
+    );
+  }
+  return freqTripIds.has(tripId);
+}
+
+function freqWindows(tripId: string): FreqWindow[] {
+  if (!freqCache.has(tripId)) {
+    freqCache.set(
+      tripId,
+      db!.query<FreqWindow, [string]>(
+        `SELECT start_time, end_time, headway_secs FROM frequencies WHERE trip_id = ? ORDER BY start_time`
+      ).all(tripId)
+    );
+  }
+  return freqCache.get(tripId)!;
+}
+
+// Next departure at a stop that sits boardOffsetSecs into the trip, at or after
+// notBefore. Returns HH:MM:SS or null if service is done for the day.
+function nextFreqDeparture(tripId: string, boardOffsetSecs: number, notBefore: string): { depart: string; headway_secs: number } | null {
+  const notBeforeSecs = timeToSecs(notBefore);
+  for (const w of freqWindows(tripId)) {
+    const winStart = timeToSecs(w.start_time);
+    const winEnd = timeToSecs(w.end_time);
+    // Trip STARTS within [winStart, winEnd]; it reaches our stop boardOffsetSecs later.
+    const n = Math.max(0, Math.ceil((notBeforeSecs - boardOffsetSecs - winStart) / w.headway_secs));
+    const tripStart = winStart + n * w.headway_secs;
+    if (tripStart <= winEnd) return { depart: secsToTime(tripStart + boardOffsetSecs), headway_secs: w.headway_secs };
+  }
+  return null;
+}
+
+// Offset of a stop from its trip's first stop (template time minus trip start).
+function tripBoardOffset(tripId: string, boardDepart: string): number {
+  const first = db!
+    .query<{ t: string }, [string]>(
+      `SELECT departure_time AS t FROM stop_times WHERE trip_id = ? ORDER BY stop_sequence LIMIT 1`
+    )
+    .get(tripId);
+  return first ? timeToSecs(boardDepart) - timeToSecs(first.t) : 0;
 }
 
 function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -200,14 +286,14 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-type RouteBadge = { route_name: string; service_type: "feeder" | "trunk" };
+type RouteBadge = { route_id: string; route_name: string; service_type: ServiceType };
 
 // Distinct routes serving a stop — shown on the nearby-stops walk-time list.
 function getStopRoutes(stopId: string, limit = 8): RouteBadge[] {
   if (!db) return [];
   const rows = db
-    .query<{ route_name: string; category: string }, [string, number]>(
-      `SELECT DISTINCT
+    .query<{ route_id: string; route_name: string; category: string }, [string, number]>(
+      `SELECT DISTINCT r.route_id,
         COALESCE(NULLIF(r.route_short_name,''), NULLIF(r.route_long_name,''), r.route_id) AS route_name,
         r.category
        FROM stop_times st
@@ -218,7 +304,7 @@ function getStopRoutes(stopId: string, limit = 8): RouteBadge[] {
        LIMIT ?`
     )
     .all(stopId, limit);
-  return rows.map((r) => ({ route_name: r.route_name, service_type: serviceType(r.category) }));
+  return rows.map((r) => ({ route_id: r.route_id, route_name: r.route_name, service_type: serviceType(r.category) }));
 }
 
 type NearbyStop = StopRow & {
@@ -260,7 +346,7 @@ function getNearbyStops(lat: number, lng: number, radiusKm = 0.5, limit = 20): N
 
 type LineRow = { route_id: string; route_name: string; category: string };
 
-function getLines(): (LineRow & { service_type: "feeder" | "trunk" })[] {
+function getLines(): (LineRow & { service_type: ServiceType })[] {
   if (!db) return [];
   const rows = db
     .query<LineRow, []>(
@@ -359,7 +445,7 @@ function nowTimeStr(): string {
 type PlanLeg = {
   route_id: string;
   route_name: string;
-  service_type: "feeder" | "trunk";
+  service_type: ServiceType;
   headsign: string;
   depart: string; // HH:MM:SS at board stop
   num_stops: number;
@@ -390,6 +476,7 @@ function getPlan(fromLat: number, fromLng: number, toLat: number, toLng: number)
     route_name: string;
     category: string;
     headsign: string;
+    trip_id: string;
     board_stop: string;
     board_seq: number;
     depart: string;
@@ -398,12 +485,15 @@ function getPlan(fromLat: number, fromLng: number, toLat: number, toLng: number)
   };
 
   // Self-join stop_times on the same trip, board before alight, valid service today.
+  // Frequency-based (rail) trips carry template times, so they bypass the
+  // departure filter; their real next departure is computed below.
   const rows = db
     .query<Row, any[]>(
       `SELECT t.route_id,
         COALESCE(NULLIF(r.route_short_name,''), NULLIF(r.route_long_name,''), r.route_id) AS route_name,
         r.category,
         t.trip_headsign AS headsign,
+        b.trip_id AS trip_id,
         b.stop_id AS board_stop, b.stop_sequence AS board_seq, b.departure_time AS depart,
         a.stop_id AS alight_stop, a.stop_sequence AS alight_seq
        FROM stop_times b
@@ -413,7 +503,7 @@ function getPlan(fromLat: number, fromLng: number, toLat: number, toLng: number)
        JOIN calendar c ON c.service_id = t.service_id
        WHERE b.stop_id IN (${bPlace})
          AND a.stop_id IN (${aPlace})
-         AND b.departure_time >= ?
+         AND (b.departure_time >= ? OR b.trip_id IN (SELECT trip_id FROM frequencies))
          AND b.departure_time < '24:00:00'
          AND c.${todayCol} = 1 AND c.start_date <= ? AND c.end_date >= ?
        ORDER BY b.departure_time
@@ -431,6 +521,11 @@ function getPlan(fromLat: number, fromLng: number, toLat: number, toLng: number)
   // shortest combined walk.
   const best = new Map<string, PlanLeg>();
   for (const row of rows) {
+    if (isFreqTrip(row.trip_id)) {
+      const next = nextFreqDeparture(row.trip_id, tripBoardOffset(row.trip_id, row.depart), currentTime);
+      if (!next) continue; // service done for today
+      row.depart = next.depart;
+    }
     const b = boardById.get(row.board_stop)!;
     const a = alightById.get(row.alight_stop)!;
     // The ride must make real progress toward the destination: the board stop
@@ -466,7 +561,7 @@ function getPlan(fromLat: number, fromLng: number, toLat: number, toLng: number)
 
 // 1-transfer trip planner. Runs when the direct planner finds fewer than 2 options.
 type TransferLeg = {
-  route_id: string; route_name: string; service_type: "feeder" | "trunk";
+  route_id: string; route_name: string; service_type: ServiceType;
   depart: string; num_stops: number;
   board: { stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; walk_m: number; walk_min: number };
   alight: { stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; walk_m?: number; walk_min?: number };
@@ -569,7 +664,8 @@ function getTransferPlan(fromLat: number, fromLng: number, toLat: number, toLng:
 
   // Geographic proximity match: find (fromStop, toStop) pairs ≤150 m apart
   // that belong to different routes. These are physical transfer points.
-  const XFER_M = 150;
+  // 250 m covers bus-bay↔rail-concourse transfers (e.g. Pasar Seni hub ↔ LRT).
+  const XFER_M = 250;
   type XferPair = { r1: string; r2: string; stop_id: string; stop_name: string; stop_lat: number; stop_lon: number; board2_stop_id: string };
   const seenPair = new Set<string>();
   const xPairs: XferPair[] = [];
@@ -595,22 +691,34 @@ function getTransferPlan(fromLat: number, fromLng: number, toLat: number, toLng:
   const todayDate = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
   const currentTime = nowTimeStr();
 
-  type TripRow = { depart: string; num_stops: number };
+  type TripRow = { depart: string; num_stops: number; trip_id: string };
 
   function nextDep(routeId: string, fromStop: string, toStop: string, notBefore: string): TripRow | null {
-    return db!
+    const candidates = db!
       .query<TripRow, [string, string, string, string, string, string]>(
-        `SELECT b.departure_time AS depart, a.stop_sequence - b.stop_sequence AS num_stops
+        `SELECT b.departure_time AS depart, a.stop_sequence - b.stop_sequence AS num_stops, b.trip_id AS trip_id
          FROM stop_times b
          JOIN stop_times a ON a.trip_id = b.trip_id AND a.stop_sequence > b.stop_sequence
          JOIN trips t ON t.trip_id = b.trip_id
          JOIN calendar c ON c.service_id = t.service_id
          WHERE t.route_id = ? AND b.stop_id = ? AND a.stop_id = ?
-           AND b.departure_time >= ? AND c.${todayCol} = 1
+           AND (b.departure_time >= ? OR b.trip_id IN (SELECT trip_id FROM frequencies))
+           AND c.${todayCol} = 1
            AND c.start_date <= ? AND c.end_date >= ?
-         ORDER BY b.departure_time LIMIT 1`
+         ORDER BY b.departure_time LIMIT 5`
       )
-      .get(routeId, fromStop, toStop, notBefore, todayDate, todayDate);
+      .all(routeId, fromStop, toStop, notBefore, todayDate, todayDate);
+
+    let bestRow: TripRow | null = null;
+    for (const c of candidates) {
+      if (isFreqTrip(c.trip_id)) {
+        const next = nextFreqDeparture(c.trip_id, tripBoardOffset(c.trip_id, c.depart), notBefore);
+        if (!next) continue;
+        c.depart = next.depart;
+      }
+      if (!bestRow || c.depart < bestRow.depart) bestRow = c;
+    }
+    return bestRow;
   }
 
   const seen = new Set<string>();

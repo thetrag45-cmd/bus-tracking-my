@@ -9,10 +9,16 @@ import { unzipSync } from "fflate";
 import * as path from "path";
 import * as fs from "fs";
 
-const CATEGORIES = [
+const ALL_CATEGORIES = [
   "rapid-bus-mrtfeeder",
   "rapid-bus-kl",
+  "rapid-rail-kl", // LRT Kelana Jaya/Ampang/Sri Petaling, MRT Kajang/Putrajaya, Monorail, BRT Sunway
 ] as const;
+
+// Optionally sync a subset: bun run sync-gtfs.ts rapid-rail-kl
+const CATEGORIES = process.argv.length > 2
+  ? process.argv.slice(2).filter((c) => (ALL_CATEGORIES as readonly string[]).includes(c))
+  : ALL_CATEGORIES;
 
 const DB_PATH = path.join(import.meta.dir, "data/gtfs.db");
 const DATA_DIR = path.join(import.meta.dir, "data");
@@ -47,6 +53,12 @@ function parseCSV(content: string): { headers: string[]; rows: string[][] } {
     return cells;
   });
   return { headers, rows };
+}
+
+// GTFS times must be zero-padded (HH:MM:SS) for string comparison to work in
+// SQL — the rail feed emits "6:00:18" style single-digit hours.
+function padTime(t: string): string {
+  return t && t.length === 7 ? `0${t}` : t;
 }
 
 function csvToObjects(content: string): Record<string, string>[] {
@@ -117,10 +129,21 @@ function setupSchema(db: Database) {
       category TEXT
     );
 
+    -- Headway-based service (rail): trip templates repeat every headway_secs
+    -- within [start_time, end_time]. stop_times rows for these trips are
+    -- offsets from the trip's first stop, per the GTFS spec.
+    CREATE TABLE IF NOT EXISTS frequencies (
+      trip_id TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      headway_secs INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_stop_times_stop_id ON stop_times(stop_id);
     CREATE INDEX IF NOT EXISTS idx_stop_times_trip_id ON stop_times(trip_id);
     CREATE INDEX IF NOT EXISTS idx_trips_route_id ON trips(route_id);
     CREATE INDEX IF NOT EXISTS idx_shapes_shape_id ON shapes(shape_id);
+    CREATE INDEX IF NOT EXISTS idx_frequencies_trip_id ON frequencies(trip_id);
   `);
 }
 
@@ -145,6 +168,7 @@ function clearCategory(db: Database, category: string) {
     if (tripIds.length > 0) {
       const tp = tripIds.map(() => "?").join(",");
       db.run(`DELETE FROM stop_times WHERE trip_id IN (${tp})`, tripIds);
+      db.run(`DELETE FROM frequencies WHERE trip_id IN (${tp})`, tripIds);
       db.run(`DELETE FROM trips WHERE trip_id IN (${tp})`, tripIds);
     }
     db.run(`DELETE FROM routes WHERE category = ?`, [category]);
@@ -213,7 +237,17 @@ async function syncCategory(db: Database, category: string) {
       `INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence) VALUES (?,?,?,?,?)`
     );
     for (const row of stopTimeRows) {
-      insertSt.run(row.trip_id, row.arrival_time, row.departure_time, row.stop_id, Number(row.stop_sequence));
+      insertSt.run(row.trip_id, padTime(row.arrival_time), padTime(row.departure_time), row.stop_id, Number(row.stop_sequence));
+    }
+
+    // frequencies — headway-based service (rail feeds); absent in bus feeds.
+    const freqRows = csvToObjects(text("frequencies.txt"));
+    if (freqRows.length) console.log(`  Inserting ${freqRows.length} frequency windows for ${category}...`);
+    const insertFreq = db.prepare(
+      `INSERT INTO frequencies (trip_id, start_time, end_time, headway_secs) VALUES (?,?,?,?)`
+    );
+    for (const row of freqRows) {
+      insertFreq.run(row.trip_id, padTime(row.start_time), padTime(row.end_time), Number(row.headway_secs));
     }
 
     // shapes — route geometry (polylines drawn on the map). Bulk insert.

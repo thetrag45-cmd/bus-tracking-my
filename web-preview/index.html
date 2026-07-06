@@ -237,6 +237,37 @@
     .journey-best-tag { font-size: 10px; font-weight: 800; color: var(--amberInk); background: var(--chip); padding: 2px 7px; border-radius: 10px; }
     .journey-transfer-tag { font-size: 10px; font-weight: 800; color: var(--teal); background: #E6F4F2; padding: 2px 7px; border-radius: 10px; }
     .transfer-card { border-color: #C8EAE6; }
+    .journey-route.rail { background: var(--ink); } /* overridden inline with line colour */
+
+    /* ── Journey planner From/To ── */
+    #dir-endpoints { display: flex; align-items: stretch; gap: 8px; padding: 4px 0 2px; }
+    #dir-endpoint-rows { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+    .dir-endpoint {
+      display: flex; align-items: center; gap: 8px; background: var(--cream);
+      border: 1.5px solid var(--line); border-radius: 12px; padding: 8px 12px;
+      font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer;
+      transition: border-color .15s;
+    }
+    .dir-endpoint:active { border-color: var(--yellow); }
+    .dir-endpoint.picking { border-color: var(--yellow); background: #FFF6DE; }
+    .dir-endpoint .ep-dot { font-size: 11px; flex-shrink: 0; }
+    .dir-endpoint .ep-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dir-endpoint .ep-hint { font-size: 10px; color: var(--faint); font-weight: 700; }
+    #dir-swap {
+      align-self: center; width: 34px; height: 34px; border-radius: 50%;
+      border: 1.5px solid var(--line); background: white; cursor: pointer;
+      font-size: 15px; color: var(--ink); flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 4px rgba(58,47,40,0.10);
+    }
+    #dir-swap:active { transform: scale(0.92); }
+
+    /* Rail station marker: diamond, line-coloured */
+    .rail-dot {
+      width: 15px; height: 15px; transform: rotate(45deg); border-radius: 3px;
+      border: 2.5px solid white; box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+    .stop-hit:hover .rail-dot, .stop-hit:active .rail-dot { transform: rotate(45deg) scale(1.25); }
     .journey-step { display: flex; align-items: flex-start; gap: 10px; padding: 3px 0; }
     .journey-step-icon { width: 20px; text-align: center; font-size: 13px; flex-shrink: 0; }
     .journey-step-text { flex: 1; font-size: 13px; color: var(--ink); line-height: 1.35; }
@@ -508,7 +539,17 @@
   <div class="sheet-head">
     <div style="flex:1">
       <div class="sheet-title">Directions</div>
-      <div id="dir-route-label" style="font-size:12px;color:var(--later);font-weight:600;margin-top:2px"></div>
+      <div id="dir-endpoints">
+        <div id="dir-endpoint-rows">
+          <div class="dir-endpoint" id="dir-from" onclick="pickEndpoint('from')">
+            <span class="ep-dot">🔵</span><span class="ep-text">Your location</span><span class="ep-hint">EDIT</span>
+          </div>
+          <div class="dir-endpoint" id="dir-to" onclick="pickEndpoint('to')">
+            <span class="ep-dot">📍</span><span class="ep-text">Destination</span><span class="ep-hint">EDIT</span>
+          </div>
+        </div>
+        <button id="dir-swap" onclick="swapEndpoints()" title="Swap">⇅</button>
+      </div>
     </div>
     <button class="close-btn" onclick="closeDirections()">✕</button>
   </div>
@@ -712,8 +753,13 @@ function renderStops(stops) {
   stopLayer.clearLayers();
   allStops = stops;
   stops.forEach(stop => {
-    const icon = L.divIcon({ html: `<div class="stop-hit"><div class="stop-dot"></div></div>`, className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
-    L.marker([stop.stop_lat, stop.stop_lon], { icon, riseOnHover: true })
+    // Rail stations render as line-coloured diamonds; bus stops as bullseyes.
+    const railRoute = (stop.routes || []).find(r => r.service_type === 'rail');
+    const inner = railRoute
+      ? `<div class="rail-dot" style="background:${(RAIL_COLORS[railRoute.route_id] || { bg: '#3A2F28' }).bg}"></div>`
+      : `<div class="stop-dot"></div>`;
+    const icon = L.divIcon({ html: `<div class="stop-hit">${inner}</div>`, className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
+    L.marker([stop.stop_lat, stop.stop_lon], { icon, riseOnHover: true, zIndexOffset: railRoute ? 200 : 0 })
       .on('click', (e) => { L.DomEvent.stopPropagation(e); openStop(stop); })
       .bindTooltip(stop.stop_name, { direction: 'top', offset: [0, -14] }).addTo(stopLayer);
   });
@@ -947,30 +993,100 @@ function closeLine() {
 
 function closeAll() { closeSheet(); closeLine(); closeNearby(); closeDirections(); if (nav.active) stopTrip(); document.getElementById('backdrop').classList.remove('visible'); }
 
-// ── Directions / trip planner: "which stop + which bus to get there" ──
+// ── Directions / trip planner: Moovit-style From/To journey planner ──
+// planFrom === null means "auto": live GPS → saved Home → map centre.
+let planFrom = null;
+let pickTarget = null; // 'from' | 'to' while the search bar is picking an endpoint
+
+// Official-ish KL rail line colours, keyed by GTFS route_id.
+const RAIL_COLORS = {
+  AG:  { bg: '#E57200', fg: '#fff' },  // LRT Ampang
+  PH:  { bg: '#76232F', fg: '#fff' },  // LRT Sri Petaling
+  KJ:  { bg: '#D50032', fg: '#fff' },  // LRT Kelana Jaya
+  KGL: { bg: '#007A33', fg: '#fff' },  // MRT Kajang
+  PYL: { bg: '#FFCD00', fg: '#3A2F28' }, // MRT Putrajaya
+  MR:  { bg: '#84BD00', fg: '#3A2F28' }, // KL Monorail
+  BRT: { bg: '#5C6BC0', fg: '#fff' },  // BRT Sunway
+  SA:  { bg: '#C2185B', fg: '#fff' },  // LRT Shah Alam
+};
+function legChipStyle(leg) {
+  if (leg.service_type === 'rail') {
+    const c = RAIL_COLORS[leg.route_id] || { bg: '#3A2F28', fg: '#fff' };
+    return `style="background:${c.bg};color:${c.fg}"`;
+  }
+  return '';
+}
+function legIcon(leg) { return leg.service_type === 'rail' ? '🚇' : '🚌'; }
+function legVerb(leg) { return leg.service_type === 'rail' ? 'Take' : 'Board'; }
+
+function autoOrigin() {
+  return userLocation
+    ? { lat: userLocation.lat, lng: userLocation.lng, name: 'Your location' }
+    : favs.home
+    ? { lat: favs.home.lat, lng: favs.home.lng, name: 'Home' }
+    : (() => { const c = map.getCenter(); return { lat: c.lat, lng: c.lng, name: 'Map centre' }; })();
+}
+
 function openDirections() {
   if (!selectedStop) return;
   openDirectionsTo(selectedStop.stop_name, selectedStop.stop_lat, selectedStop.stop_lon);
 }
 
-async function openDirectionsTo(name, lat, lng) {
+function openDirectionsTo(name, lat, lng) {
   planDest = { name, lat, lng };
-  // Origin priority: live GPS → saved Home → current map centre.
-  const origin = userLocation
-    ? { lat: userLocation.lat, lng: userLocation.lng, label: 'your location' }
-    : favs.home
-    ? { lat: favs.home.lat, lng: favs.home.lng, label: 'Home' }
-    : (() => { const c = map.getCenter(); return { lat: c.lat, lng: c.lng, label: 'map centre' }; })();
-
+  planFrom = null; // fresh plan starts from auto-origin
   document.getElementById('sheet').classList.remove('open');
   selectedStop = null;
   document.getElementById('dir-sheet').classList.add('open');
   document.getElementById('backdrop').classList.add('visible');
-  document.getElementById('dir-route-label').textContent = `From ${origin.label} → ${name}`;
+  replan();
+}
+
+function renderEndpoints() {
+  const from = planFrom || autoOrigin();
+  document.querySelector('#dir-from .ep-text').textContent = from.name;
+  document.querySelector('#dir-to .ep-text').textContent = planDest ? planDest.name : 'Destination';
+  document.getElementById('dir-from').classList.toggle('picking', pickTarget === 'from');
+  document.getElementById('dir-to').classList.toggle('picking', pickTarget === 'to');
+}
+
+// Tap an endpoint row → the main search bar picks that endpoint.
+function pickEndpoint(which) {
+  pickTarget = which;
+  renderEndpoints();
+  const input = document.getElementById('search-input');
+  input.value = '';
+  input.placeholder = which === 'from' ? 'Search starting point…' : 'Search destination…';
+  input.focus();
+  toast(which === 'from' ? 'Pick a starting point' : 'Pick a destination');
+}
+
+function setEndpoint(which, name, lat, lng) {
+  if (which === 'from') planFrom = { name, lat, lng };
+  else planDest = { name, lat, lng };
+  pickTarget = null;
+  const input = document.getElementById('search-input');
+  input.value = '';
+  input.placeholder = 'Search stops & places';
+  replan();
+}
+
+function swapEndpoints() {
+  if (!planDest) return;
+  const from = planFrom || autoOrigin();
+  planFrom = planDest;
+  planDest = from;
+  replan();
+}
+
+async function replan() {
+  if (!planDest) return;
+  renderEndpoints();
+  const from = planFrom || autoOrigin();
   const list = document.getElementById('dir-list');
   list.innerHTML = '<div class="loading-row"><div class="spinner"></div></div>';
   try {
-    const r = await fetch(`${PROXY}/plan?fromLat=${origin.lat}&fromLng=${origin.lng}&toLat=${lat}&toLng=${lng}`);
+    const r = await fetch(`${PROXY}/plan?fromLat=${from.lat}&fromLng=${from.lng}&toLat=${planDest.lat}&toLng=${planDest.lng}`);
     renderPlan((await r.json()).options || []);
   } catch {
     list.innerHTML = '<div class="empty-arrivals">Could not plan this trip</div>';
@@ -992,14 +1108,14 @@ function renderPlan(options) {
     const departLabel = dm <= 0 ? 'now' : dm < 60 ? `in ${dm} min` : `at ${fmtClock(o.depart)}`;
     return `<div class="journey-card ${i === 0 ? 'best' : ''}" onclick="drawPlan(${i})">
       <div class="journey-head">
-        <span class="journey-route ${o.service_type}">${o.route_name}</span>
+        <span class="journey-route ${o.service_type}" ${legChipStyle(o)}>${o.route_name}</span>
         <span class="journey-head-headsign">${o.headsign || ''}</span>
         ${i === 0 ? '<span class="journey-best-tag">BEST</span>' : ''}
         <span class="journey-depart">${departLabel}</span>
       </div>
       <div class="journey-step"><span class="journey-step-icon">🚶</span><span class="journey-step-text">Walk <b>${o.board.walk_min} min</b> to <b>${o.board.stop_name}</b></span></div>
       <div class="journey-rail">│</div>
-      <div class="journey-step"><span class="journey-step-icon">🚌</span><span class="journey-step-text">Board <b>${o.route_name}</b> · ride <b>${o.num_stops} stop${o.num_stops > 1 ? 's' : ''}</b> <span class="sub">(departs ${fmtClock(o.depart)})</span></span></div>
+      <div class="journey-step"><span class="journey-step-icon">${legIcon(o)}</span><span class="journey-step-text">${legVerb(o)} <b>${o.route_name}</b> · ride <b>${o.num_stops} stop${o.num_stops > 1 ? 's' : ''}</b> <span class="sub">(departs ${fmtClock(o.depart)})</span></span></div>
       <div class="journey-rail">│</div>
       <div class="journey-step"><span class="journey-step-icon">🚏</span><span class="journey-step-text">Get off at <b>${o.alight.stop_name}</b></span></div>
       <div class="journey-rail">│</div>
@@ -1018,38 +1134,61 @@ function renderTransferCard(o, i) {
   const totalMin = Math.round((dm2 < 0 ? 0 : dm2) + o.leg2.num_stops * 1.5 + (o.leg2.alight.walk_min || 0));
   return `<div class="journey-card transfer-card" onclick="drawPlan(${i})">
     <div class="journey-head">
-      <span class="journey-route ${o.leg1.service_type}">${o.leg1.route_name}</span>
+      <span class="journey-route ${o.leg1.service_type}" ${legChipStyle(o.leg1)}>${o.leg1.route_name}</span>
       <span style="font-size:11px;color:var(--muted);margin:0 4px">→</span>
-      <span class="journey-route ${o.leg2.service_type}">${o.leg2.route_name}</span>
+      <span class="journey-route ${o.leg2.service_type}" ${legChipStyle(o.leg2)}>${o.leg2.route_name}</span>
       <span class="journey-transfer-tag">1 transfer</span>
       <span class="journey-depart">${departLabel}</span>
     </div>
     <div class="journey-step"><span class="journey-step-icon">🚶</span><span class="journey-step-text">Walk <b>${o.leg1.board.walk_min} min</b> to <b>${o.leg1.board.stop_name}</b></span></div>
     <div class="journey-rail">│</div>
-    <div class="journey-step"><span class="journey-step-icon">🚌</span><span class="journey-step-text">Board <b>${o.leg1.route_name}</b> · <b>${o.leg1.num_stops} stop${o.leg1.num_stops !== 1 ? 's' : ''}</b> <span class="sub">(departs ${fmtClock(o.leg1.depart)})</span></span></div>
+    <div class="journey-step"><span class="journey-step-icon">${legIcon(o.leg1)}</span><span class="journey-step-text">${legVerb(o.leg1)} <b>${o.leg1.route_name}</b> · <b>${o.leg1.num_stops} stop${o.leg1.num_stops !== 1 ? 's' : ''}</b> <span class="sub">(departs ${fmtClock(o.leg1.depart)})</span></span></div>
     <div class="journey-rail">│</div>
-    <div class="journey-step"><span class="journey-step-icon">🔄</span><span class="journey-step-text">Transfer at <b>${o.transfer_stop.stop_name}</b> · board <b>${o.leg2.route_name}</b> <span class="sub">(${leg2Label})</span></span></div>
+    <div class="journey-step"><span class="journey-step-icon">🔄</span><span class="journey-step-text">Transfer at <b>${o.transfer_stop.stop_name}</b> · ${legVerb(o.leg2).toLowerCase()} <b>${o.leg2.route_name}</b> <span class="sub">(${leg2Label})</span></span></div>
     <div class="journey-rail">│</div>
-    <div class="journey-step"><span class="journey-step-icon">🚌</span><span class="journey-step-text">Ride <b>${o.leg2.num_stops} stop${o.leg2.num_stops !== 1 ? 's' : ''}</b> · get off at <b>${o.leg2.alight.stop_name}</b></span></div>
+    <div class="journey-step"><span class="journey-step-icon">${legIcon(o.leg2)}</span><span class="journey-step-text">Ride <b>${o.leg2.num_stops} stop${o.leg2.num_stops !== 1 ? 's' : ''}</b> · get off at <b>${o.leg2.alight.stop_name}</b></span></div>
     <div class="journey-rail">│</div>
     <div class="journey-step"><span class="journey-step-icon">📍</span><span class="journey-step-text">Walk <b>${o.leg2.alight.walk_min || '?'} min</b> to your destination</span></div>
     <button class="journey-start" onclick="event.stopPropagation(); startTrip(${i})">▶ Start</button>
   </div>`;
 }
+function legColour(leg) {
+  if (leg.service_type === 'rail') return (RAIL_COLORS[leg.route_id] || { bg: '#3A2F28' }).bg;
+  return leg.service_type === 'feeder' ? '#1B9E8A' : '#3E9BD6';
+}
+
+async function drawLegShape(leg) {
+  try {
+    const detail = await (await fetch(`${PROXY}/route/${encodeURIComponent(leg.route_id)}`)).json();
+    const dir = (detail.directions || []).find(d => d.stops.some(s => s.stop_id === leg.board.stop_id)) || detail.directions[0];
+    if (dir && dir.shape && dir.shape.length) {
+      L.polyline(dir.shape, { color: 'white', weight: 8, opacity: 0.9, lineCap: 'round' }).addTo(shapeLayer);
+      L.polyline(dir.shape, { color: legColour(leg), weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(shapeLayer);
+    }
+  } catch {}
+}
+
 async function drawPlan(i) {
   const o = planOptions[i];
   if (!o) return;
   [...document.querySelectorAll('.journey-card')].forEach((c, idx) => c.classList.toggle('best', idx === i));
   shapeLayer.clearLayers();
-  try {
-    const detail = await (await fetch(`${PROXY}/route/${encodeURIComponent(o.route_id)}`)).json();
-    const dir = (detail.directions || []).find(d => d.stops.some(s => s.stop_id === o.board.stop_id)) || detail.directions[0];
-    if (dir && dir.shape && dir.shape.length) {
-      const colour = o.service_type === 'feeder' ? '#1B9E8A' : '#3E9BD6';
-      L.polyline(dir.shape, { color: 'white', weight: 8, opacity: 0.9, lineCap: 'round' }).addTo(shapeLayer);
-      L.polyline(dir.shape, { color: colour, weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(shapeLayer);
-    }
-  } catch {}
+  if (o.type === 'transfer') {
+    await drawLegShape(o.leg1);
+    await drawLegShape(o.leg2);
+    addPlanMarker(o.leg1.board.stop_lat, o.leg1.board.stop_lon, '#1F6B3A', 'BOARD');
+    addPlanMarker(o.transfer_stop.lat, o.transfer_stop.lng, '#5C6BC0', 'TRANSFER');
+    addPlanMarker(o.leg2.alight.stop_lat, o.leg2.alight.stop_lon, '#C77B1E', 'GET OFF');
+    try {
+      map.fitBounds(L.latLngBounds([
+        [o.leg1.board.stop_lat, o.leg1.board.stop_lon],
+        [o.transfer_stop.lat, o.transfer_stop.lng],
+        [o.leg2.alight.stop_lat, o.leg2.alight.stop_lon],
+      ]).pad(0.3), { paddingBottomRight: [0, window.innerHeight * 0.55] });
+    } catch {}
+    return;
+  }
+  await drawLegShape(o);
   addPlanMarker(o.board.stop_lat, o.board.stop_lon, '#1F6B3A', 'BOARD');
   addPlanMarker(o.alight.stop_lat, o.alight.stop_lon, '#C77B1E', 'GET OFF');
   try {
@@ -1071,9 +1210,28 @@ function closeDirections() {
 }
 
 // ── Live trip navigation (Google-Maps-style: when to board, stop countdown, when to get off) ──
+// Transfer options run as two chained leg navigations: leg1 ends at the
+// transfer stop, then leg2 starts automatically with zero board-walk.
+function transferLegToOption(leg, walkMinOverride) {
+  return {
+    route_id: leg.route_id, route_name: leg.route_name, service_type: leg.service_type,
+    headsign: leg.headsign || '', depart: leg.depart, num_stops: leg.num_stops,
+    board: { ...leg.board, walk_min: walkMinOverride ?? leg.board.walk_min ?? 1, walk_m: leg.board.walk_m ?? 0 },
+    alight: { ...leg.alight, walk_min: leg.alight.walk_min ?? 1, walk_m: leg.alight.walk_m ?? 0 },
+  };
+}
+
 async function startTrip(i) {
   const o = planOptions[i];
   if (!o) return;
+  if (o.type === 'transfer') {
+    await startLegNav(transferLegToOption(o.leg1), transferLegToOption(o.leg2, 1));
+  } else {
+    await startLegNav(o, null);
+  }
+}
+
+async function startLegNav(o, pendingNext) {
   document.getElementById('dir-sheet').classList.remove('open');
   document.getElementById('nav-sheet').classList.add('open');
   document.getElementById('backdrop').classList.add('visible');
@@ -1093,8 +1251,9 @@ async function startTrip(i) {
     drawPlanShape(dir, o);
   } catch {}
 
+  if (nav.gpsWatchId != null) navigator.geolocation.clearWatch(nav.gpsWatchId);
   nav = { active: true, phase: 'walk_board', option: o, routeStops, boardIdx, alightIdx, myBusId: null,
-          gpsWatchId: null, gpsLat: null, gpsLng: null };
+          gpsWatchId: null, gpsLat: null, gpsLng: null, pendingNext };
 
   // Start continuous GPS tracking for walk-phase auto-advance.
   if (navigator.geolocation) {
@@ -1119,9 +1278,8 @@ async function startTrip(i) {
 function drawPlanShape(dir, o) {
   shapeLayer.clearLayers();
   if (dir && dir.shape && dir.shape.length) {
-    const colour = o.service_type === 'feeder' ? '#1B9E8A' : '#3E9BD6';
     L.polyline(dir.shape, { color: 'white', weight: 8, opacity: 0.9, lineCap: 'round' }).addTo(shapeLayer);
-    L.polyline(dir.shape, { color: colour, weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(shapeLayer);
+    L.polyline(dir.shape, { color: legColour(o), weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(shapeLayer);
   }
   addPlanMarker(o.board.stop_lat, o.board.stop_lon, '#1F6B3A', 'BOARD');
   addPlanMarker(o.alight.stop_lat, o.alight.stop_lon, '#C77B1E', 'GET OFF');
@@ -1251,7 +1409,17 @@ function navTick() {
   }
 }
 
-function setPhase(p) { nav.phase = p; renderNav(); navTick(); }
+function setPhase(p) {
+  // Transfer chaining: finishing the ride on leg 1 rolls straight into leg 2
+  // at the transfer stop instead of walking to a destination.
+  if (p === 'walk_dest' && nav.pendingNext) {
+    const next = nav.pendingNext;
+    toast(`Transfer here — next: ${next.route_name}`);
+    startLegNav(next, null);
+    return;
+  }
+  nav.phase = p; renderNav(); navTick();
+}
 
 function renderNav() {
   const o = nav.option;
@@ -1382,25 +1550,25 @@ async function doSearch(query) {
     placeHits = placesRes.status === 'fulfilled' ? placesRes.value : [];
 
     if (!searchHits.length && !placeHits.length) {
-      searchResults.innerHTML = `<div class=”search-result” style=”cursor:default”><span class=”search-result-name” style=”color:var(--faint)”>No results for “${query}”</span></div>`;
+      searchResults.innerHTML = `<div class="search-result" style="cursor:default"><span class="search-result-name" style="color:var(--faint)">No results for “${query}”</span></div>`;
       searchResults.classList.add('visible');
       return;
     }
     const stopHTML = searchHits.map(s => `
-      <div class=”search-result” onclick='selectSearchResult(${JSON.stringify(s.stop_id)})'>
-        <span class=”search-result-code”>${s.stop_code || s.stop_id.slice(-4)}</span>
-        <span class=”search-result-name”>${s.stop_name}</span>
+      <div class="search-result" onclick='selectSearchResult(${JSON.stringify(s.stop_id)})'>
+        <span class="search-result-code">${s.stop_code || s.stop_id.slice(-4)}</span>
+        <span class="search-result-name">${s.stop_name}</span>
       </div>`).join('');
     const placeHTML = placeHits.map((p, i) => {
       // Use OSM 'name' field (just the place name); fall back to first display_name segment.
       const short = p.name || p.display_name.split(',')[0].trim();
-      return `<div class=”search-result” onclick='selectPlaceResult(${i})'>
-        <span class=”search-result-place”>📍</span>
-        <span class=”search-result-name”>${short}</span>
+      return `<div class="search-result" onclick='selectPlaceResult(${i})'>
+        <span class="search-result-place">📍</span>
+        <span class="search-result-name">${short}</span>
       </div>`;
     }).join('');
     searchResults.innerHTML = stopHTML +
-      (placeHTML ? `<div class=”search-result-divider”>Places</div>${placeHTML}` : '');
+      (placeHTML ? `<div class="search-result-divider">Places</div>${placeHTML}` : '');
     searchResults.classList.add('visible');
   } catch {
     if (seq === searchSeq) searchResults.classList.remove('visible');
@@ -1409,8 +1577,9 @@ async function doSearch(query) {
 function selectSearchResult(stopId) {
   const stop = searchHits.find(s => s.stop_id === stopId);
   if (!stop) return;
-  searchInput.value = stop.stop_name;
   searchResults.classList.remove('visible');
+  if (pickTarget) { setEndpoint(pickTarget, stop.stop_name, stop.stop_lat, stop.stop_lon); return; }
+  searchInput.value = stop.stop_name;
   map.setView([stop.stop_lat, stop.stop_lon], 16);
   loadNearbyStops();
   setTimeout(() => openStop(stop), 400);
@@ -1418,10 +1587,11 @@ function selectSearchResult(stopId) {
 function selectPlaceResult(i) {
   const p = placeHits[i];
   if (!p) return;
-  const name = p.display_name.split(',').slice(0, 2).join(',').trim();
+  const name = p.name || p.display_name.split(',')[0].trim();
   const lat = parseFloat(p.lat), lng = parseFloat(p.lon);
-  searchInput.value = name;
   searchResults.classList.remove('visible');
+  if (pickTarget) { setEndpoint(pickTarget, name, lat, lng); return; }
+  searchInput.value = name;
   map.setView([lat, lng], 15);
   openDirectionsTo(name, lat, lng);
 }
